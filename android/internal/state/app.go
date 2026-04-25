@@ -20,12 +20,12 @@ const (
 
 // App holds the full application state.
 type App struct {
-	mu sync.Mutex
+	Mu sync.Mutex
 
 	CurrentPage  Page
 	FeedItems    []models.ClusterItem
-	CurrentIndex int // index into FeedItems
-	ItemPage     int // page number within current item's paginated text
+	CurrentIndex int
+	ItemPage     int
 	ContextOpen  bool
 
 	ExpandedItem *models.ExpandedItem
@@ -42,8 +42,8 @@ func New(apiBaseURL string, cacheStore *cache.Store) *App {
 }
 
 func (a *App) CurrentItem() *models.ClusterItem {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
 	if a.CurrentIndex < 0 || a.CurrentIndex >= len(a.FeedItems) {
 		return nil
 	}
@@ -52,16 +52,16 @@ func (a *App) CurrentItem() *models.ClusterItem {
 }
 
 func (a *App) SetFeedItems(items []models.ClusterItem) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
 	a.FeedItems = items
 	a.CurrentIndex = 0
 	a.ItemPage = 0
 }
 
 func (a *App) NextItem() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
 	if a.CurrentIndex+1 >= len(a.FeedItems) {
 		return false
 	}
@@ -72,8 +72,8 @@ func (a *App) NextItem() bool {
 }
 
 func (a *App) PrevItem() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
 	if a.CurrentIndex <= 0 {
 		return false
 	}
@@ -83,11 +83,11 @@ func (a *App) PrevItem() bool {
 	return true
 }
 
-func (a *App) NextPage() { a.mu.Lock(); a.ItemPage++; a.mu.Unlock() }
+func (a *App) NextPage() { a.Mu.Lock(); a.ItemPage++; a.Mu.Unlock() }
 func (a *App) PrevPage() {
-	a.mu.Lock()
+	a.Mu.Lock()
 	if a.ItemPage > 0 {
 		a.ItemPage--
 	}
-	a.mu.Unlock()
+	a.Mu.Unlock()
 }

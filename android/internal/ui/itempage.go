@@ -2,28 +2,31 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/SvenDowideit/newsapp/android/internal/api/models"
-	"github.com/go-drift/drift"
+	"github.com/go-drift/drift/pkg/core"
+	"github.com/go-drift/drift/pkg/graphics"
+	"github.com/go-drift/drift/pkg/layout"
+	"github.com/go-drift/drift/pkg/widgets"
 )
 
-const linesPerPage = 18 // approximate lines per eink screen
+const linesPerPage = 18
 
 // ItemPage renders a single cluster item, paginated.
-// currentPage is 0-indexed. totalPages is set by this function.
-// onGesture receives gesture strings: "next_page","prev_page","next_item","prev_item","discard","expand","menu"
+// onGesture is called with: "next_item","prev_item","discard","expand","menu","interest_up","interest_down"
 func ItemPage(
 	item *models.ClusterItem,
 	expanded *models.ExpandedItem,
 	currentPage int,
 	onGesture func(string),
-) drift.Widget {
+) core.Widget {
 	if item == nil {
-		return drift.Center(drift.Text("No item", BodyStyle()))
+		return widgets.Center{Child: widgets.Text{Content: "No item", Style: BodyStyle()}}
 	}
 
-	// Build full text blocks
 	var blocks []string
 	blocks = append(blocks, item.Headline)
 	blocks = append(blocks, "")
@@ -46,7 +49,6 @@ func ItemPage(
 		meta = "BREAKING · " + meta
 	}
 
-	// Simple pagination: split blocks into pages of ~linesPerPage text lines
 	pages := paginateBlocks(blocks, linesPerPage)
 	totalPages := len(pages)
 	if currentPage >= totalPages {
@@ -57,79 +59,101 @@ func ItemPage(
 	}
 	pageContent := pages[currentPage]
 
-	widgets := make([]drift.Widget, 0, len(pageContent)+3)
-	for _, line := range pageContent {
+	textWidgets := make([]core.Widget, 0, len(pageContent)+1)
+	for i, line := range pageContent {
 		if line == "" {
-			widgets = append(widgets, drift.SizedBox(drift.Size{Height: 8}))
+			textWidgets = append(textWidgets, widgets.VSpace(8))
 		} else {
 			style := BodyStyle()
-			if line == pageContent[0] && currentPage == 0 {
+			if i == 0 && currentPage == 0 {
 				style = HeadlineStyle()
 			}
-			widgets = append(widgets, drift.Text(line, style))
+			textWidgets = append(textWidgets, widgets.Text{Content: line, Style: style})
 		}
 	}
 
-	// Page indicator + interest buttons row
-	interestRow := drift.Row([]drift.Widget{
-		drift.Text(fmt.Sprintf("%d / %d", currentPage+1, totalPages), MetaStyle()),
-		drift.Spacer(),
-		drift.GestureDetector(
-			drift.Padding(drift.Text("−", BodyStyle()), drift.Insets{Left: 16, Right: 8, Top: 4, Bottom: 4}),
-			drift.GestureCallbacks{OnTap: func() { onGesture("interest_down") }},
-		),
-		drift.GestureDetector(
-			drift.Padding(drift.Text("+", BodyStyle()), drift.Insets{Left: 8, Right: 16, Top: 4, Bottom: 4}),
-			drift.GestureCallbacks{OnTap: func() { onGesture("interest_up") }},
-		),
-	})
-
-	hint := drift.Text("← → items · swipe ↑↓ · long-press menu", MetaStyle())
-
-	// Gesture zones overlay
-	content := drift.Stack([]drift.Widget{
-		drift.Column(append(widgets,
-			drift.Spacer(),
-			drift.Text(meta, MetaStyle()),
-			drift.Padding(interestRow, drift.Insets{Top: 4}),
-			drift.Padding(hint, drift.Insets{Top: 2, Bottom: 4}),
-		)),
-		// Left tap zone → prev page / reduce interest
-		drift.Positioned(
-			drift.GestureDetector(
-				drift.SizedBox(drift.Size{Width: 80, Height: -1}),
-				drift.GestureCallbacks{
-					OnTap:        func() { onGesture("prev_page") },
-					OnSwipeUp:    func() { onGesture("next_item") },
-					OnSwipeDown:  func() { onGesture("prev_item") },
-					OnSwipeLeft:  func() { onGesture("discard") },
-					OnSwipeRight: func() { onGesture("expand") },
-					OnLongPress:  func() { onGesture("menu") },
+	// Bottom row: page counter, hint, interest buttons
+	interestRow := widgets.Row{
+		MainAxisAlignment: widgets.MainAxisAlignmentSpaceBetween,
+		Children: []core.Widget{
+			widgets.Text{
+				Content: fmt.Sprintf("p%d/%d  ← → items  long-press menu", currentPage+1, totalPages),
+				Style:   MetaStyle(),
+			},
+			widgets.Row{
+				Children: []core.Widget{
+					interestButton("−", func() { onGesture("interest_down") }),
+					widgets.HSpace(12),
+					interestButton("+", func() { onGesture("interest_up") }),
 				},
-			),
-			drift.Position{Left: 0, Top: 0, Bottom: 0},
-		),
-		// Right tap zone → next page / increase interest
-		drift.Positioned(
-			drift.GestureDetector(
-				drift.SizedBox(drift.Size{Width: 80, Height: -1}),
-				drift.GestureCallbacks{
-					OnTap:        func() { onGesture("next_page") },
-					OnSwipeUp:    func() { onGesture("next_item") },
-					OnSwipeDown:  func() { onGesture("prev_item") },
-					OnSwipeLeft:  func() { onGesture("discard") },
-					OnSwipeRight: func() { onGesture("expand") },
-					OnLongPress:  func() { onGesture("menu") },
-				},
-			),
-			drift.Position{Right: 0, Top: 0, Bottom: 0},
-		),
-	})
+			},
+		},
+	}
 
-	return drift.Padding(content, EinkTheme.Padding)
+	body := widgets.Column{
+		Children: append(textWidgets,
+			widgets.Spacer(),
+			widgets.Text{Content: meta, Style: MetaStyle()},
+			widgets.Padding{
+				Padding: layout.EdgeInsetsOnly(0, 6, 0, 0),
+				Child:   interestRow,
+			},
+		),
+	}
+
+	// Swipe / long-press via pan gesture
+	var panStart graphics.Offset
+	var panStartTime time.Time
+
+	return widgets.Padding{
+		Padding: layout.EdgeInsetsAll(pagePadding),
+		Child: widgets.GestureDetector{
+			Child: body,
+			OnTap: func() { onGesture("next_item") },
+			OnPanStart: func(d widgets.DragStartDetails) {
+				panStart = d.Position
+				panStartTime = time.Now()
+			},
+			OnPanEnd: func(d widgets.DragEndDetails) {
+				dx := d.Position.X - panStart.X
+				dy := d.Position.Y - panStart.Y
+				adx := math.Abs(dx)
+				ady := math.Abs(dy)
+				dur := time.Since(panStartTime)
+
+				if adx < 15 && ady < 15 && dur > 600*time.Millisecond {
+					onGesture("menu")
+					return
+				}
+				const minSwipe = 60
+				if adx > minSwipe && adx > ady {
+					if dx < 0 {
+						onGesture("discard")
+					} else {
+						onGesture("expand")
+					}
+				} else if ady > minSwipe && ady > adx {
+					if dy < 0 {
+						onGesture("next_item")
+					} else {
+						onGesture("prev_item")
+					}
+				}
+			},
+		},
+	}
 }
 
-// paginateBlocks splits lines into pages of at most maxLines lines.
+func interestButton(label string, onTap func()) core.Widget {
+	return widgets.GestureDetector{
+		OnTap: onTap,
+		Child: widgets.Padding{
+			Padding: layout.EdgeInsetsSymmetric(12, 6),
+			Child:   widgets.Text{Content: label, Style: BoldBodyStyle()},
+		},
+	}
+}
+
 func paginateBlocks(blocks []string, maxLines int) [][]string {
 	var pages [][]string
 	var current []string

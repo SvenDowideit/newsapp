@@ -1,15 +1,16 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"time"
 
-	"github.com/SvenDowideit/newsapp/android/android/internal/cache"
-	appstate "github.com/SvenDowideit/newsapp/android/android/internal/state"
-	"github.com/SvenDowideit/newsapp/android/android/internal/ui"
-	"github.com/go-drift/drift"
+	"github.com/SvenDowideit/newsapp/android/internal/cache"
+	appstate "github.com/SvenDowideit/newsapp/android/internal/state"
+	"github.com/SvenDowideit/newsapp/android/internal/ui"
+	"github.com/go-drift/drift/pkg/core"
+	"github.com/go-drift/drift/pkg/drift"
+	"github.com/go-drift/drift/pkg/widgets"
 )
 
 const (
@@ -32,62 +33,82 @@ func main() {
 
 	app := appstate.New(apiURL, store)
 
-	// Prefetch from cache first, then refresh from API
 	if cached, err := store.LoadItems(); err == nil && len(cached) > 0 {
 		app.SetFeedItems(cached)
 	}
-	go refreshFeed(app)
 
-	drift.Run(drift.AppConfig{
-		Title:  "News",
-		Theme:  ui.EinkTheme,
-		Width:  540,
-		Height: 960,
-	}, func(ctx *drift.BuildContext) drift.Widget {
-		return buildRoot(ctx, app)
-	})
+	drift.Run(drift.NewApp(buildRootWidget(app)))
 }
 
-func buildRoot(ctx *drift.BuildContext, app *appstate.App) drift.Widget {
-	app.mu.Lock()
-	page := app.CurrentPage
-	contextOpen := app.ContextOpen
-	app.mu.Unlock()
-
-	if contextOpen {
-		return ui.ContextMenu(func(action string) {
-			handleMenuAction(action, app, ctx)
-		})
+func buildRootWidget(app *appstate.App) core.Widget {
+	type uiState struct {
+		page        appstate.Page
+		contextOpen bool
 	}
 
-	switch page {
-	case appstate.PageFeed:
-		return ui.FeedPage(app.FeedItems, func(idx int) {
-			app.mu.Lock()
-			app.CurrentIndex = idx
-			app.CurrentPage = appstate.PageItem
-			app.ItemPage = 0
-			app.mu.Unlock()
-			ctx.Rebuild()
-		})
+	return core.Stateful(
+		func() uiState {
+			app.Mu.Lock()
+			defer app.Mu.Unlock()
+			return uiState{page: app.CurrentPage, contextOpen: app.ContextOpen}
+		},
+		func(state uiState, _ core.BuildContext, setState func(func(uiState) uiState)) core.Widget {
+			rebuild := func() {
+				drift.Dispatch(func() {
+					app.Mu.Lock()
+					s := uiState{page: app.CurrentPage, contextOpen: app.ContextOpen}
+					app.Mu.Unlock()
+					setState(func(_ uiState) uiState { return s })
+				})
+			}
 
-	case appstate.PageItem:
-		item := app.CurrentItem()
-		app.mu.Lock()
-		itemPage := app.ItemPage
-		expanded := app.ExpandedItem
-		app.mu.Unlock()
+			// Kick off initial feed load
+			if state.page == appstate.PageFeed && len(app.FeedItems) == 0 {
+				go func() {
+					refreshFeed(app)
+					rebuild()
+				}()
+			}
 
-		return ui.ItemPage(item, expanded, itemPage, func(gesture string) {
-			handleItemGesture(gesture, app, ctx)
-		})
+			if state.contextOpen {
+				return ui.ContextMenu(func(action string) {
+					handleMenuAction(action, app)
+					rebuild()
+				})
+			}
 
-	default:
-		return drift.Center(drift.Text("Unknown page", ui.BodyStyle()))
-	}
+			switch state.page {
+			case appstate.PageFeed:
+				app.Mu.Lock()
+				items := app.FeedItems
+				app.Mu.Unlock()
+				return ui.FeedPage(items, func(idx int) {
+					app.Mu.Lock()
+					app.CurrentIndex = idx
+					app.CurrentPage = appstate.PageItem
+					app.ItemPage = 0
+					app.Mu.Unlock()
+					rebuild()
+				})
+
+			case appstate.PageItem:
+				item := app.CurrentItem()
+				app.Mu.Lock()
+				itemPage := app.ItemPage
+				expanded := app.ExpandedItem
+				app.Mu.Unlock()
+				return ui.ItemPage(item, expanded, itemPage, func(gesture string) {
+					handleItemGesture(gesture, app, rebuild)
+				})
+
+			default:
+				return widgets.Center{Child: widgets.Text{Content: "Unknown page", Style: ui.BodyStyle()}}
+			}
+		},
+	)
 }
 
-func handleItemGesture(gesture string, app *appstate.App, ctx *drift.BuildContext) {
+func handleItemGesture(gesture string, app *appstate.App, rebuild func()) {
 	item := app.CurrentItem()
 	if item == nil {
 		return
@@ -95,65 +116,51 @@ func handleItemGesture(gesture string, app *appstate.App, ctx *drift.BuildContex
 	id := item.ID
 
 	switch gesture {
-	case "next_page":
-		app.NextPage()
-		ctx.Rebuild()
-
-	case "prev_page":
-		app.PrevPage()
-		ctx.Rebuild()
-
 	case "next_item":
 		if app.NextItem() {
-			ctx.Rebuild()
+			rebuild()
 		}
-
 	case "prev_item":
 		if app.PrevItem() {
-			ctx.Rebuild()
+			rebuild()
 		}
-
 	case "discard":
 		go app.API.Discard(id)
 		app.NextItem()
-		ctx.Rebuild()
-
+		rebuild()
 	case "expand":
 		go func() {
 			expanded, err := app.API.ExpandItem(id)
 			if err == nil {
-				app.mu.Lock()
+				app.Mu.Lock()
 				app.ExpandedItem = expanded
-				app.mu.Unlock()
+				app.Mu.Unlock()
 				go app.API.Follow(id)
-				ctx.Rebuild()
+				rebuild()
 			}
 		}()
-
 	case "menu":
-		app.mu.Lock()
+		app.Mu.Lock()
 		app.ContextOpen = true
-		app.mu.Unlock()
-		ctx.Rebuild()
-
+		app.Mu.Unlock()
+		rebuild()
 	case "interest_up":
 		go app.API.AdjustInterest(id, "up")
-
 	case "interest_down":
 		go app.API.AdjustInterest(id, "down")
 	}
 }
 
-func handleMenuAction(action string, app *appstate.App, ctx *drift.BuildContext) {
+func handleMenuAction(action string, app *appstate.App) {
 	item := app.CurrentItem()
 	id := int64(0)
 	if item != nil {
 		id = item.ID
 	}
 
-	app.mu.Lock()
+	app.Mu.Lock()
 	app.ContextOpen = false
-	app.mu.Unlock()
+	app.Mu.Unlock()
 
 	switch action {
 	case "save":
@@ -162,7 +169,7 @@ func handleMenuAction(action string, app *appstate.App, ctx *drift.BuildContext)
 		}
 	case "send":
 		if item != nil && item.CanonicalURL != nil {
-			drift.ShareURL(*item.CanonicalURL)
+			log.Printf("share: %s", *item.CanonicalURL)
 		}
 	case "interest_up":
 		if id != 0 {
@@ -178,7 +185,6 @@ func handleMenuAction(action string, app *appstate.App, ctx *drift.BuildContext)
 			app.NextItem()
 		}
 	}
-	ctx.Rebuild()
 }
 
 func refreshFeed(app *appstate.App) {
@@ -193,21 +199,4 @@ func refreshFeed(app *appstate.App) {
 		}
 		time.Sleep(2 * time.Minute)
 	}
-}
-
-// recordReadTime sends a read event when the user spends time on an item.
-func recordReadTime(app *appstate.App, id int64, start time.Time) {
-	dur := int(time.Since(start).Seconds())
-	if dur < 2 {
-		return
-	}
-	go func() {
-		t := true
-		_ = app.API.RecordRead(id, &dur, &t)
-	}()
-}
-
-func init() {
-	// Suppress "declared and not used" for fmt in simple builds.
-	_ = fmt.Sprintf
 }

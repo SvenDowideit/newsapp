@@ -1,47 +1,52 @@
 package ui
 
-import "github.com/go-drift/drift"
+import (
+	"github.com/go-drift/drift/pkg/graphics"
+	"github.com/go-drift/drift/pkg/theme"
+)
 
-// EinkTheme is optimised for eink displays:
-// pure black/white, large text, no animations.
-var EinkTheme = drift.Theme{
-	Background:   drift.ColorRGB(255, 255, 255),
-	Foreground:   drift.ColorRGB(0, 0, 0),
-	Accent:       drift.ColorRGB(0, 0, 0),
-	FontSizeBody: 18,
-	FontSizeHead: 22,
-	Padding:      drift.Insets{Top: 16, Right: 16, Bottom: 16, Left: 16},
+var (
+	colorBlack = graphics.RGB(0, 0, 0)
+	colorWhite = graphics.RGB(255, 255, 255)
+	colorGray  = graphics.RGB(80, 80, 80)
+
+	bodyFontSize float64 = 18
+	headFontSize float64 = 22
+	metaFontSize float64 = 14
+	pagePadding  float64 = 16
+)
+
+// EinkTheme returns a high-contrast light ThemeData suitable for eink displays.
+func EinkTheme() *theme.ThemeData {
+	return theme.DefaultLightTheme()
 }
 
-// StatusStyle returns text style for a breaking-news badge.
-func StatusStyle() drift.TextStyle {
-	return drift.TextStyle{
-		Size:   14,
-		Bold:   true,
-		Color:  drift.ColorRGB(255, 255, 255),
-		BgColor: drift.ColorRGB(0, 0, 0),
+func HeadlineStyle() graphics.TextStyle {
+	return graphics.TextStyle{
+		Color:      colorBlack,
+		FontSize:   headFontSize,
+		FontWeight: graphics.FontWeightBold,
 	}
 }
 
-// HeadlineStyle returns text style for item headlines.
-func HeadlineStyle() drift.TextStyle {
-	return drift.TextStyle{
-		Size: EinkTheme.FontSizeHead,
-		Bold: true,
+func BodyStyle() graphics.TextStyle {
+	return graphics.TextStyle{
+		Color:    colorBlack,
+		FontSize: bodyFontSize,
 	}
 }
 
-// BodyStyle returns text style for summary/body text.
-func BodyStyle() drift.TextStyle {
-	return drift.TextStyle{
-		Size: EinkTheme.FontSizeBody,
+func MetaStyle() graphics.TextStyle {
+	return graphics.TextStyle{
+		Color:    colorGray,
+		FontSize: metaFontSize,
 	}
 }
 
-// MetaStyle is smaller grey text for metadata (source, date).
-func MetaStyle() drift.TextStyle {
-	return drift.TextStyle{
-		Size:  14,
-		Color: drift.ColorRGB(80, 80, 80),
+func BoldBodyStyle() graphics.TextStyle {
+	return graphics.TextStyle{
+		Color:      colorBlack,
+		FontSize:   bodyFontSize,
+		FontWeight: graphics.FontWeightBold,
 	}
 }

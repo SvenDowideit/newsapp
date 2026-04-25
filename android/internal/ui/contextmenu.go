@@ -1,50 +1,44 @@
 package ui
 
 import (
-	"github.com/go-drift/drift"
+	"github.com/go-drift/drift/pkg/core"
+	"github.com/go-drift/drift/pkg/layout"
+	"github.com/go-drift/drift/pkg/widgets"
 )
 
-// ContextMenuItem is a single menu entry.
-type ContextMenuItem struct {
-	Label   string
-	Action  string
+type menuEntry struct {
+	label  string
+	action string
 }
 
-var defaultMenuItems = []ContextMenuItem{
-	{Label: "Save / bookmark", Action: "save"},
-	{Label: "Send link", Action: "send"},
-	{Label: "More like this", Action: "interest_up"},
-	{Label: "Less like this", Action: "interest_down"},
-	{Label: "Discard", Action: "discard"},
-	{Label: "Close menu", Action: "close"},
+var defaultMenuItems = []menuEntry{
+	{"Save / bookmark", "save"},
+	{"Send link", "send"},
+	{"More like this  +", "interest_up"},
+	{"Less like this  −", "interest_down"},
+	{"Discard", "discard"},
+	{"Close menu", "close"},
 }
 
-// ContextMenu renders a full-screen overlay menu.
-// onAction is called with the action string of the selected item.
-func ContextMenu(onAction func(string)) drift.Widget {
-	items := make([]drift.Widget, 0, len(defaultMenuItems))
+// ContextMenu renders a full-page menu.
+func ContextMenu(onAction func(string)) core.Widget {
+	items := make([]core.Widget, 0, len(defaultMenuItems)*2)
 	for _, mi := range defaultMenuItems {
-		action := mi.Action
-		label := mi.Label
+		action := mi.action
+		label := mi.label
 		items = append(items,
-			drift.GestureDetector(
-				drift.Padding(
-					drift.Text(label, BodyStyle()),
-					drift.Insets{Top: 20, Bottom: 20, Left: 16, Right: 16},
-				),
-				drift.GestureCallbacks{
-					OnTap: func() { onAction(action) },
+			widgets.GestureDetector{
+				OnTap: func() { onAction(action) },
+				Child: widgets.Padding{
+					Padding: layout.EdgeInsetsSymmetric(pagePadding, 20),
+					Child:   widgets.Text{Content: label, Style: BodyStyle()},
 				},
-			),
+			},
+			widgets.Divider{},
 		)
-		items = append(items, drift.Divider())
 	}
 
-	return drift.Container(
-		drift.Column(items),
-		drift.ContainerOptions{
-			Color: drift.ColorRGB(255, 255, 255),
-			Border: drift.Border{Width: 1, Color: drift.ColorRGB(0, 0, 0)},
-		},
-	)
+	return widgets.Container{
+		Child: widgets.Column{Children: items},
+	}
 }

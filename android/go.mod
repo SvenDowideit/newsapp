@@ -1,10 +1,15 @@
-module github.com/SvenDowideit/newsapp/android/android
+module github.com/SvenDowideit/newsapp/android
 
 go 1.24.0
 
 require (
 	github.com/go-drift/drift v0.25.1
 	go.etcd.io/bbolt v1.3.9
+)
+
+require (
+	golang.org/x/image v0.34.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 )
 
 // Drift is pre-release; replace directive lets us pin to main until a tag exists.
