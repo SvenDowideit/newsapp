@@ -1,0 +1,54 @@
+[server]
+host = "0.0.0.0"
+port = 8000
+db_path = "news.duckdb"
+
+[ollama]
+#base_url = "http://localhost:11434"
+base_url = "http://p1gen4.home.org.au:11434"
+model = "mistral"
+embed_model = "nomic-embed-text"
+summary_max_tokens = 200
+
+[scheduler]
+default_interval_seconds = 900
+min_interval_seconds = 60
+max_interval_seconds = 86400
+active_reader_boost = 0.25
+breaking_news_threshold = 5
+breaking_news_window_minutes = 10
+
+[interest]
+decay_rate = 0.01
+learn_rate_read = 0.15
+learn_rate_discard = -0.05
+learn_rate_follow = 0.25
+learn_rate_save = 0.30
+learn_rate_interest_up = 0.20
+learn_rate_interest_down = -0.15
+
+[[sources]]
+id = "hn"
+type = "hackernews"
+label = "Hacker News"
+min_score = 50
+
+[[sources]]
+id = "lobsters"
+type = "rss"
+label = "Lobsters"
+url = "https://lobste.rs/rss"
+
+[[sources]]
+id = "google_news_tech"
+type = "google_news"
+label = "Google News: Technology"
+query = "technology"
+
+[[sources]]
+id = "reddit_programming"
+type = "reddit"
+label = "r/programming"
+subreddit = "programming"
+sort = "hot"
+limit = 25

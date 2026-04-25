@@ -1,0 +1,20 @@
+[Unit]
+Description=News Aggregator Backend
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=newsagg
+Group=newsagg
+WorkingDirectory=/opt/newsagg
+EnvironmentFile=-/etc/newsagg/env
+ExecStart=/opt/newsagg/venv/bin/uvicorn newsagg.main:app \
+    --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
