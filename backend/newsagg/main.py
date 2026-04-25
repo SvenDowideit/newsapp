@@ -19,6 +19,7 @@ from .api import items as items_api
 from .api.feed import push_event
 from .api import sources as sources_router
 from .api import topics as topics_router
+from .api import webui as webui_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,10 +65,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="newsagg", version="0.1.0", lifespan=lifespan)
 
-app.include_router(feed_api.router,      prefix="/feed",    tags=["feed"])
-app.include_router(items_api.router,     prefix="/items",   tags=["items"])
+app.include_router(feed_api.router,       prefix="/feed",    tags=["feed"])
+app.include_router(items_api.router,      prefix="/items",   tags=["items"])
 app.include_router(sources_router.router, prefix="/sources", tags=["sources"])
-app.include_router(topics_router.router, prefix="/topics",  tags=["topics"])
+app.include_router(topics_router.router,  prefix="/topics",  tags=["topics"])
+app.include_router(webui_router.router,   prefix="/ui",      tags=["ui"])
 
 
 @app.get("/health")

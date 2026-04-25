@@ -17,7 +17,27 @@ def init(db_path: str) -> None:
     # Run migrations on a dedicated connection, then close it.
     con = duckdb.connect(_db_path)
     _run_migrations(con)
+    _reseed_sequences(con)
     con.close()
+
+
+def _reseed_sequences(con: duckdb.DuckDBPyConnection) -> None:
+    """Advance each sequence past the highest existing ID to prevent PK collisions."""
+    reseeds = [
+        ("seq_raw_items",   "SELECT coalesce(max(id), 0) FROM raw_items"),
+        ("seq_clusters",    "SELECT coalesce(max(id), 0) FROM clusters"),
+        ("seq_embeddings",  "SELECT coalesce(max(id), 0) FROM embeddings"),
+        ("seq_read_events", "SELECT coalesce(max(id), 0) FROM read_events"),
+    ]
+    for seq, query in reseeds:
+        try:
+            row = con.execute(query).fetchone()
+            max_id = row[0] if row else 0
+            if max_id > 0:
+                # setval sets the sequence's next value to max_id + 1
+                con.execute(f"SELECT setval('{seq}', {max_id})")
+        except Exception:
+            pass  # table may not exist yet on first run
 
 
 def get() -> duckdb.DuckDBPyConnection:

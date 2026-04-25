@@ -1,16 +1,18 @@
 .PHONY: help backend-install models dev run test lint clean \
         android-deps android-run android-apk android-install \
+        android-docker-build android-docker-apk \
         docker-build docker-run install-systemd
 
-BACKEND_DIR   := backend
-ANDROID_DIR   := android
+BACKEND_DIR   := $(CURDIR)/backend
+ANDROID_DIR   := $(CURDIR)/android
 VENV          := $(BACKEND_DIR)/venv
 PYTHON        := $(VENV)/bin/python
 PIP           := $(VENV)/bin/pip
 UVICORN       := $(VENV)/bin/uvicorn
-DATA_DIR      := data
-APK_OUT       := newsapp.apk
+DATA_DIR      := $(CURDIR)/data
+APK_OUT       := $(CURDIR)/newsapp.apk
 DOCKER_IMAGE  := newsagg
+ANDROID_DOCKER_IMAGE := newsagg-android
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 
@@ -27,15 +29,19 @@ help:
 	@echo "  make lint              Run ruff linter"
 	@echo ""
 	@echo "Android:"
-	@echo "  make android-deps      Download Go module dependencies"
-	@echo "  make android-run       Run app on Linux desktop (preview)"
-	@echo "  make android-apk       Build $(APK_OUT) via Drift CLI"
-	@echo "  make android-install   adb install $(APK_OUT)"
+	@echo "  make android-deps           Download Go module dependencies"
+	@echo "  make android-run            Run app on Linux desktop (preview)"
+	@echo "  make android-apk            Build $(APK_OUT) via Drift CLI (requires local SDK)"
+	@echo "  make android-install        adb install $(APK_OUT)"
+	@echo "  make android-docker-build   Build Docker image with full Android SDK"
+	@echo "  make android-docker-apk     Build APK inside Docker → $(APK_OUT)"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  make docker-build      Build Docker image ($(DOCKER_IMAGE))"
+	@echo "  make docker-build      Build backend Docker image ($(DOCKER_IMAGE))"
 	@echo "  make docker-run        Run backend in Docker on :8000"
 	@echo "  make install-systemd   Copy newsagg.service to /etc/systemd/system/"
+	@echo ""
+	@echo "Web UI:  http://localhost:8000/ui  (gesture-based browser fallback)"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make clean             Remove venv, caches, *.duckdb"
@@ -56,15 +62,15 @@ models:
 	ollama pull nomic-embed-text
 
 dev: backend-install
-	cd $(BACKEND_DIR) && ../$(UVICORN) newsagg.main:app \
+	cd $(BACKEND_DIR) && $(UVICORN) newsagg.main:app \
 		--reload --host 0.0.0.0 --port 8000
 
 run: backend-install
-	cd $(BACKEND_DIR) && ../$(UVICORN) newsagg.main:app \
+	cd $(BACKEND_DIR) && $(UVICORN) newsagg.main:app \
 		--host 0.0.0.0 --port 8000 --workers 1
 
 test: backend-install
-	cd $(BACKEND_DIR) && ../$(VENV)/bin/pytest tests/ -v
+	cd $(BACKEND_DIR) && $(VENV)/bin/pytest tests/ -v
 
 lint: backend-install
 	$(VENV)/bin/ruff check $(BACKEND_DIR)/newsagg/ || true
@@ -78,10 +84,19 @@ android-run: android-deps
 	cd $(ANDROID_DIR) && go run ./cmd/newsapp
 
 android-apk: android-deps
-	cd $(ANDROID_DIR) && drift build android -o ../$(APK_OUT)
+	cd $(ANDROID_DIR) && drift build android -o $(APK_OUT)
 
 android-install: $(APK_OUT)
 	adb install -r $(APK_OUT)
+
+android-docker-build:
+	docker build -t $(ANDROID_DOCKER_IMAGE) -f $(ANDROID_DIR)/Dockerfile $(CURDIR)
+
+android-docker-apk: android-docker-build
+	mkdir -p $(CURDIR)/out
+	docker run --rm -v "$(CURDIR)/out:/out" $(ANDROID_DOCKER_IMAGE)
+	cp $(CURDIR)/out/newsapp.apk $(APK_OUT)
+	@echo "APK ready: $(APK_OUT)"
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 
@@ -93,8 +108,8 @@ docker-run: docker-build
 	docker run -d \
 		--name newsagg \
 		-p 8000:8000 \
-		-v "$(CURDIR)/$(DATA_DIR):/data" \
-		-v "$(CURDIR)/$(BACKEND_DIR)/config.toml:/app/config.toml:ro" \
+		-v "$(DATA_DIR):/data" \
+		-v "$(BACKEND_DIR)/config.toml:/app/config.toml:ro" \
 		$(DOCKER_IMAGE)
 	@echo "Backend running at http://localhost:8000"
 

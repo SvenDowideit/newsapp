@@ -18,8 +18,8 @@ async def list_topics():
             coalesce(w.weight, 0.5) AS weight,
             count(DISTINCT c.id)    AS item_count
         FROM (
-            SELECT DISTINCT unnest(topics) AS topic
-            FROM clusters
+            SELECT DISTINCT t.topic
+            FROM clusters, UNNEST(topics) AS t(topic)
         ) t
         LEFT JOIN interest_weights w ON w.topic = t.topic
         LEFT JOIN clusters c ON list_contains(c.topics, t.topic)

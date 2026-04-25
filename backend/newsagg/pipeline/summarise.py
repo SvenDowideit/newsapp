@@ -4,7 +4,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-import httpx
+import ollama
+from json_repair import repair_json
 
 if TYPE_CHECKING:
     from ..config import OllamaConfig
@@ -52,31 +53,77 @@ Reply ONLY with valid JSON, no other text:
 }}"""
 
 
-def _call_ollama(prompt: str, cfg: "OllamaConfig") -> dict:
-    resp = httpx.post(
-        f"{cfg.base_url}/api/generate",
-        json={
-            "model": cfg.model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"num_predict": cfg.summary_max_tokens * 2},
-        },
-        timeout=120,
-    )
-    resp.raise_for_status()
-    text = resp.json().get("response", "")
-    # Extract JSON from response (model sometimes wraps in markdown)
+def _client(cfg: "OllamaConfig") -> ollama.Client:
+    return ollama.Client(host=cfg.base_url)
+
+
+def _ensure_model(client: ollama.Client, model: str) -> None:
+    try:
+        client.show(model)
+    except ollama.ResponseError as exc:
+        if exc.status_code == 404:
+            logger.info("Pulling model '%s' from Ollama registry…", model)
+            client.pull(model)
+        else:
+            raise
+
+
+def _parse_json(text: str) -> dict:
     start = text.find("{")
-    end = text.rfind("}") + 1
-    if start == -1 or end == 0:
-        raise ValueError(f"No JSON in response: {text[:200]}")
-    return json.loads(text[start:end])
+    if start == -1:
+        raise ValueError(f"No JSON object in response: {text[:200]}")
+    candidate = text[start:]
+    # First try strict parse
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+    # Fall back to repair (handles truncated responses missing closing braces)
+    repaired = repair_json(candidate)
+    result = json.loads(repaired)
+    if not isinstance(result, dict):
+        raise ValueError(f"Repaired JSON is not a dict: {repaired[:200]}")
+    return result
+
+
+def _generate(prompt: str, cfg: "OllamaConfig") -> dict:
+    client = _client(cfg)
+    _ensure_model(client, cfg.model)
+    resp = client.generate(
+        model=cfg.model,
+        prompt=prompt,
+        stream=False,
+        options={"num_predict": cfg.summary_max_tokens},
+    )
+    text = resp.response.strip()
+    if text.startswith("```"):
+        text = "\n".join(
+            line for line in text.splitlines()
+            if not line.startswith("```")
+        ).strip()
+    try:
+        return _parse_json(text)
+    except (ValueError, json.JSONDecodeError):
+        tokens_generated = getattr(resp, "eval_count", None)
+        if tokens_generated and tokens_generated >= cfg.summary_max_tokens:
+            logger.warning(
+                "Ollama response hit the token limit (%d tokens generated = limit). "
+                "Increase [ollama] summary_max_tokens in config.toml above %d.",
+                tokens_generated, cfg.summary_max_tokens,
+            )
+        else:
+            logger.warning(
+                "Ollama response contained no parseable JSON "
+                "(%s tokens generated, limit %d). Raw tail: %r",
+                tokens_generated, cfg.summary_max_tokens, text[-120:],
+            )
+        raise
 
 
 def summarise_single(title: str, body: str, cfg: "OllamaConfig") -> dict:
     prompt = _SUMMARY_PROMPT.format(title=title or "", body=(body or "")[:3000])
     try:
-        return _call_ollama(prompt, cfg)
+        return _generate(prompt, cfg)
     except Exception as exc:
         logger.warning("Summarisation failed: %s", exc)
         return {
@@ -94,7 +141,7 @@ def summarise_cluster(articles: list[dict], cfg: "OllamaConfig") -> dict:
     )
     prompt = _MERGE_PROMPT.format(n=len(articles), articles=articles_text)
     try:
-        return _call_ollama(prompt, cfg)
+        return _generate(prompt, cfg)
     except Exception as exc:
         logger.warning("Cluster summarisation failed: %s", exc)
         first = articles[0] if articles else {}

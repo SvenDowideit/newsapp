@@ -4,7 +4,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-import httpx
+import ollama
 
 if TYPE_CHECKING:
     from ..config import OllamaConfig
@@ -27,6 +27,21 @@ Reply ONLY with valid JSON, no other text:
 {{"cluster_id": <integer or null>, "confidence": <0.0-1.0>}}"""
 
 
+def _client(cfg: "OllamaConfig") -> ollama.Client:
+    return ollama.Client(host=cfg.base_url)
+
+
+def _ensure_model(client: ollama.Client, model: str) -> None:
+    try:
+        client.show(model)
+    except ollama.ResponseError as exc:
+        if exc.status_code == 404:
+            logger.info("Pulling model '%s' from Ollama registry…", model)
+            client.pull(model)
+        else:
+            raise
+
+
 def assign_cluster(
     title: str,
     body: str,
@@ -46,14 +61,15 @@ def assign_cluster(
         candidates=cand_text,
     )
     try:
-        resp = httpx.post(
-            f"{cfg.base_url}/api/generate",
-            json={"model": cfg.model, "prompt": prompt, "stream": False,
-                  "options": {"num_predict": 64}},
-            timeout=60,
+        client = _client(cfg)
+        _ensure_model(client, cfg.model)
+        resp = client.generate(
+            model=cfg.model,
+            prompt=prompt,
+            stream=False,
+            options={"num_predict": 64},
         )
-        resp.raise_for_status()
-        text = resp.json().get("response", "")
+        text = resp.response
         start = text.find("{")
         end = text.rfind("}") + 1
         data = json.loads(text[start:end])

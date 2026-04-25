@@ -194,10 +194,10 @@ async def breaking_news_detector(cfg: Config, push_fn) -> None:
             con = database.get()
             spikes = con.execute(
                 f"""
-                SELECT unnest(topics) AS topic, count(*) AS n
-                FROM clusters
-                WHERE created_at >= now() - INTERVAL '{window} minutes'
-                GROUP BY 1
+                SELECT t.topic, count(*) AS n
+                FROM clusters c, UNNEST(c.topics) AS t(topic)
+                WHERE c.created_at >= now() - INTERVAL '{window} minutes'
+                GROUP BY t.topic
                 HAVING count(*) >= {threshold}
                 """
             ).fetchall()

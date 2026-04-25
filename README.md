@@ -49,20 +49,22 @@ curl http://localhost:8000/feed
 ## Make Targets
 
 ```
-make help              Print this list
-make backend-install   Create backend/venv and install Python deps
-make models            Pull required Ollama models (mistral, nomic-embed-text)
-make dev               Run backend in dev mode (auto-reload, :8000)
-make run               Run backend in production mode
-make test              Run Python test suite
-make android-deps      Download Go module dependencies
-make android-run       Run Android app on Linux desktop (preview)
-make android-apk       Build Android APK via Drift CLI
-make android-install   Install APK to connected Android device via adb
-make docker-build      Build backend Docker image
-make docker-run        Run backend in Docker (mounts ./data as DB volume)
-make lint              Run ruff linter on Python code
-make clean             Remove venv, __pycache__, *.duckdb
+make help                   Print this list
+make backend-install        Create backend/venv and install Python deps
+make models                 Pull required Ollama models (mistral, nomic-embed-text)
+make dev                    Run backend in dev mode (auto-reload, :8000)
+make run                    Run backend in production mode
+make test                   Run Python test suite
+make android-deps           Download Go module dependencies
+make android-run            Run Android app on Linux desktop (preview)
+make android-apk            Build Android APK via Drift CLI (local SDK required)
+make android-install        Install APK to connected Android device via adb
+make android-docker-build   Build Docker image with full Android SDK
+make android-docker-apk     Build APK inside Docker → ./newsapp.apk
+make docker-build           Build backend Docker image
+make docker-run             Run backend in Docker (mounts ./data as DB volume)
+make lint                   Run ruff linter on Python code
+make clean                  Remove venv, __pycache__, *.duckdb
 ```
 
 ---
@@ -191,6 +193,22 @@ learn_rate_interest_down = -0.15
 
 ---
 
+## Web UI
+
+A browser-based fallback UI is available at **`http://localhost:8000/ui`** once the backend is running. It mirrors the Android gesture model:
+
+- **Tap left / right zones** or **← →** keys: previous/next page within item
+- **Swipe up/down** or **J/K** keys: next/previous item
+- **Swipe left** or **D**: discard item
+- **Swipe right** or **E**: expand (fetch full summary)
+- **Long press** or **M**: context menu (save, send link, interest up/down)
+- **+/-**: interest up/down
+- **R**: refresh feed
+
+Breaking news is pushed live via SSE and shown as a toast.
+
+---
+
 ## Android App
 
 ```bash
@@ -199,8 +217,23 @@ make android-run       # preview on Linux desktop
 
 # Set backend URL (default: http://100.64.0.1:8000 — Tailscale range)
 export NEWSAGG_API=http://<server-ip>:8000
-make android-apk       # build newsapp.apk
+make android-apk       # build newsapp.apk (requires Drift CLI + Android SDK locally)
 make android-install   # adb install newsapp.apk
+```
+
+### Build APK via Docker (no local Android SDK required)
+
+```bash
+make android-docker-build   # build Docker image with full SDK (one-time, ~2 GB)
+make android-docker-apk     # build newsapp.apk inside Docker → ./newsapp.apk
+make android-install        # adb install newsapp.apk
+```
+
+Or manually:
+```bash
+docker build -t newsagg-android -f android/Dockerfile .
+docker run --rm -v "$PWD/out:/out" newsagg-android
+adb install -r out/newsapp.apk
 ```
 
 ---
@@ -306,7 +339,8 @@ news/
 │       │   ├── feed.py          ← GET /feed, SSE /feed/live
 │       │   ├── items.py         ← POST /items/{id}/*
 │       │   ├── sources.py       ← GET/POST /sources
-│       │   └── topics.py        ← GET /topics
+│       │   ├── topics.py        ← GET /topics
+│       │   └── webui.py         ← GET /ui  (browser fallback UI)
 │       ├── fetcher/
 │       │   ├── scheduler.py     ← adaptive multi-threaded scheduler
 │       │   ├── rss.py
@@ -323,6 +357,7 @@ news/
 │           ├── cluster.py       ← LLM cluster assignment
 │           └── summarise.py     ← Ollama summarisation prompts
 └── android/
+    ├── Dockerfile               ← Docker build environment (full Android SDK)
     ├── go.mod
     ├── cmd/newsapp/main.go      ← app entry point
     └── internal/

@@ -70,18 +70,29 @@ func ItemPage(
 		}
 	}
 
-	// Page indicator
-	pageIndicator := drift.Text(
-		fmt.Sprintf("%d / %d", currentPage+1, totalPages),
-		MetaStyle(),
-	)
+	// Page indicator + interest buttons row
+	interestRow := drift.Row([]drift.Widget{
+		drift.Text(fmt.Sprintf("%d / %d", currentPage+1, totalPages), MetaStyle()),
+		drift.Spacer(),
+		drift.GestureDetector(
+			drift.Padding(drift.Text("−", BodyStyle()), drift.Insets{Left: 16, Right: 8, Top: 4, Bottom: 4}),
+			drift.GestureCallbacks{OnTap: func() { onGesture("interest_down") }},
+		),
+		drift.GestureDetector(
+			drift.Padding(drift.Text("+", BodyStyle()), drift.Insets{Left: 8, Right: 16, Top: 4, Bottom: 4}),
+			drift.GestureCallbacks{OnTap: func() { onGesture("interest_up") }},
+		),
+	})
+
+	hint := drift.Text("← → items · swipe ↑↓ · long-press menu", MetaStyle())
 
 	// Gesture zones overlay
 	content := drift.Stack([]drift.Widget{
 		drift.Column(append(widgets,
 			drift.Spacer(),
 			drift.Text(meta, MetaStyle()),
-			drift.Padding(pageIndicator, drift.Insets{Top: 8}),
+			drift.Padding(interestRow, drift.Insets{Top: 4}),
+			drift.Padding(hint, drift.Insets{Top: 2, Bottom: 4}),
 		)),
 		// Left tap zone → prev page / reduce interest
 		drift.Positioned(

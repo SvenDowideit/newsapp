@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE SEQUENCE IF NOT EXISTS seq_raw_items START 1;
 CREATE TABLE IF NOT EXISTS raw_items (
     id           BIGINT PRIMARY KEY DEFAULT nextval('seq_raw_items'),
-    source_id    VARCHAR NOT NULL REFERENCES sources(id),
+    source_id    VARCHAR NOT NULL,
     fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     url          VARCHAR,
     title        VARCHAR,
@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_raw_items_fetched_at   ON raw_items(fetched_at);
 CREATE SEQUENCE IF NOT EXISTS seq_embeddings START 1;
 CREATE TABLE IF NOT EXISTS embeddings (
     id          BIGINT PRIMARY KEY DEFAULT nextval('seq_embeddings'),
-    raw_item_id BIGINT NOT NULL UNIQUE REFERENCES raw_items(id),
+    raw_item_id BIGINT NOT NULL UNIQUE,
     model       VARCHAR NOT NULL,
     vector      FLOAT[],
     created_at  TIMESTAMPTZ DEFAULT now()
@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_clusters_latest_seen_at ON clusters(latest_seen_a
 CREATE SEQUENCE IF NOT EXISTS seq_read_events START 1;
 CREATE TABLE IF NOT EXISTS read_events (
     id               BIGINT PRIMARY KEY DEFAULT nextval('seq_read_events'),
-    cluster_id       BIGINT NOT NULL REFERENCES clusters(id),
+    cluster_id       BIGINT NOT NULL,
     event_type       VARCHAR NOT NULL,
     occurred_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     duration_seconds INTEGER,

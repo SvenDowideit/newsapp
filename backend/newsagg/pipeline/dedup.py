@@ -54,30 +54,42 @@ def _process_item(
     ollama_cfg = cfg.ollama
 
     # Gate 2: embedding similarity dedup
-    text_for_embed = f"{title or ''} {(body or '')[:500]}"
-    vec = embed(text_for_embed, ollama_cfg)
+    # Skip if we already embedded this item in a previous (failed) attempt
+    existing_embed = con.execute(
+        "SELECT id FROM embeddings WHERE raw_item_id = ?", [item_id]
+    ).fetchone()
 
-    if vec is not None:
-        # Check cosine similarity against recent embeddings
-        dup_id = _find_embedding_duplicate(item_id, vec, con)
-        if dup_id is not None:
+    if existing_embed is None:
+        text_for_embed = f"{title or ''} {(body or '')[:500]}"
+        vec = embed(text_for_embed, ollama_cfg)
+
+        if vec is not None:
+            dup_id = _find_embedding_duplicate(item_id, vec, con)
+            if dup_id is not None:
+                con.execute(
+                    "UPDATE raw_items SET duplicate_of = ? WHERE id = ?",
+                    [dup_id, item_id],
+                )
+                logger.debug("Item %d is embedding-duplicate of %d", item_id, dup_id)
+                return
+
             con.execute(
-                "UPDATE raw_items SET duplicate_of = ? WHERE id = ?",
-                [dup_id, item_id],
+                """
+                INSERT INTO embeddings (raw_item_id, model, vector) VALUES (?, ?, ?)
+                ON CONFLICT (raw_item_id) DO NOTHING
+                """,
+                [item_id, ollama_cfg.embed_model, vec],
             )
-            logger.debug("Item %d is embedding-duplicate of %d", item_id, dup_id)
-            return
-
-        # Store embedding
-        con.execute(
-            "INSERT INTO embeddings (raw_item_id, model, vector) VALUES (?, ?, ?)",
-            [item_id, ollama_cfg.embed_model, vec],
-        )
-        embed_row = con.execute(
-            "SELECT id FROM embeddings WHERE raw_item_id = ?", [item_id]
+            embed_row = con.execute(
+                "SELECT id FROM embeddings WHERE raw_item_id = ?", [item_id]
+            ).fetchone()
+            if embed_row:
+                con.execute("UPDATE raw_items SET embed_id = ? WHERE id = ?", [embed_row[0], item_id])
+    else:
+        vec = con.execute(
+            "SELECT vector FROM embeddings WHERE raw_item_id = ?", [item_id]
         ).fetchone()
-        if embed_row:
-            con.execute("UPDATE raw_items SET embed_id = ? WHERE id = ?", [embed_row[0], item_id])
+        vec = vec[0] if vec else None
 
     # Gate 3: cluster assignment
     candidate_clusters = _find_candidate_clusters(vec, con) if vec else []
@@ -170,12 +182,13 @@ def _create_cluster(
 ) -> None:
     result = summarise_single(title or "", body or "", ollama_cfg)
     now = datetime.now(timezone.utc)
-    con.execute(
+    cluster_row = con.execute(
         """
         INSERT INTO clusters
             (first_seen_at, latest_seen_at, canonical_url, headline, summary,
              key_points, topics, source_ids, item_count)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        RETURNING id
         """,
         [
             now, now, url,
@@ -185,8 +198,7 @@ def _create_cluster(
             result.get("topics", []),
             [source_id],
         ],
-    )
-    cluster_row = con.execute("SELECT last_insert_rowid()").fetchone()
+    ).fetchone()
     if cluster_row:
         cid = cluster_row[0]
         con.execute("UPDATE raw_items SET cluster_id = ? WHERE id = ?", [cid, item_id])

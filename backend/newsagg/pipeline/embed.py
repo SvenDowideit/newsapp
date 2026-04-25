@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import httpx
 import numpy as np
+import ollama
 
 if TYPE_CHECKING:
     from ..config import OllamaConfig
@@ -12,19 +12,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def embed(text: str, cfg: "OllamaConfig") -> list[float] | None:
-    """Get embedding vector from Ollama. Returns None on failure."""
+def _ensure_model(client: ollama.Client, model: str) -> None:
+    """Pull the model if it is not already present on the server."""
     try:
-        resp = httpx.post(
-            f"{cfg.base_url}/api/embeddings",
-            json={"model": cfg.embed_model, "prompt": text[:2000]},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        vec = resp.json().get("embedding")
+        client.show(model)
+    except ollama.ResponseError as exc:
+        if exc.status_code == 404:
+            logger.info("Pulling embed model '%s' from Ollama registry…", model)
+            client.pull(model)
+        else:
+            raise
+
+
+def embed(text: str, cfg: "OllamaConfig") -> list[float] | None:
+    """Return a unit-normalised embedding vector, or None on failure."""
+    try:
+        client = ollama.Client(host=cfg.base_url)
+        _ensure_model(client, cfg.embed_model)
+        resp = client.embed(model=cfg.embed_model, input=text[:2000])
+        vec = resp.embeddings[0] if resp.embeddings else None
         if not vec:
             return None
-        # Normalise to unit vector for cosine similarity via dot product
         arr = np.array(vec, dtype=np.float32)
         norm = np.linalg.norm(arr)
         if norm > 0:

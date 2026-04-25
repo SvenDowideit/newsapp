@@ -135,6 +135,12 @@ func handleItemGesture(gesture string, app *appstate.App, ctx *drift.BuildContex
 		app.ContextOpen = true
 		app.mu.Unlock()
 		ctx.Rebuild()
+
+	case "interest_up":
+		go app.API.AdjustInterest(id, "up")
+
+	case "interest_down":
+		go app.API.AdjustInterest(id, "down")
 	}
 }
 
