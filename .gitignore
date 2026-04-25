@@ -1,4 +1,5 @@
 __pycache__
 backend/venv/
 backend/news.duckdb
+backend/news.duckdb.wal
 backend/newsagg.egg-info/

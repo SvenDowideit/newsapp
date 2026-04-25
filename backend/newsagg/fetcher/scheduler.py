@@ -14,7 +14,7 @@ from ..config import Config, SourceConfig
 from . import hackernews, google_news, reddit, rss, scraper, search, youtube, email_imap
 from .types import RawItem
 from .hashing import content_hash, url_hash, title_hash, resolve_url
-from .rss_discovery import autodiscover_rss
+from .rss_discovery import autodiscover_rss, fetch_and_autodiscover
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,12 @@ def _persist_items(items: list[RawItem], con: duckdb.DuckDBPyConnection) -> int:
             ],
         )
         new_count += 1
+        # Scan the item's page for RSS feeds (once per domain per process)
+        if item.url:
+            try:
+                fetch_and_autodiscover(item.url, con)
+            except Exception:
+                pass
     return new_count
 
 

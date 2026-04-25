@@ -52,3 +52,15 @@ label = "r/programming"
 subreddit = "programming"
 sort = "hot"
 limit = 25
+
+[[sources]]
+id = "ABC-QLD-News"
+type = "rss"
+label = "ABC QLD News"
+url = "https://www.abc.net.au/news/feed/5555988/rss.xml"
+
+[[sources]]
+id = "theguardian"
+type = "rss"
+label = "the guardian"
+url = "https://www.theguardian.com/world/rss"

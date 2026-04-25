@@ -420,6 +420,9 @@ function openItem(i) {
   renderItem();
   document.getElementById('feed-view').style.display = 'none';
   document.getElementById('item-view').style.display = 'flex';
+  // Mark as read immediately on open so it won't reappear if we navigate away quickly
+  const item = feed[cursor];
+  if (item) post(`/items/${item.id}/read`, {duration_seconds: 0, fully_read: false});
 }
 
 function renderItem() {
@@ -578,7 +581,6 @@ function recordRead() {
   const item = feed[cursor];
   if (!item || !itemReadStart) return;
   const dur = Math.round((Date.now() - itemReadStart) / 1000);
-  if (dur < 2) return;
   post(`/items/${item.id}/read`, {duration_seconds: dur, fully_read: false});
   itemReadStart = null;
 }
