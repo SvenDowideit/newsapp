@@ -13,7 +13,8 @@ from .. import db as database
 from ..config import Config, SourceConfig
 from . import hackernews, google_news, reddit, rss, scraper, search, youtube, email_imap
 from .types import RawItem
-from .hashing import content_hash, url_hash, title_hash
+from .hashing import content_hash, url_hash, title_hash, resolve_url
+from .rss_discovery import autodiscover_rss
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,16 @@ def _persist_items(items: list[RawItem], con: duckdb.DuckDBPyConnection) -> int:
     """Insert raw items, skipping duplicates. Returns count of new items."""
     new_count = 0
     for item in items:
+        # Resolve redirect wrappers (Google News, shorteners, etc.) to final URL.
+        # resolve_url returns (final_url, html) — html is non-None when a GET was
+        # needed, so we scan it for RSS feeds at no extra cost.
+        final_url, html = resolve_url(item.url)
+        item.url = final_url
+        if html and final_url:
+            try:
+                autodiscover_rss(final_url, html, con)
+            except Exception:
+                pass
         chash = content_hash(item.url, item.title)
         uhash = url_hash(item.url)
         thash = title_hash(item.title)

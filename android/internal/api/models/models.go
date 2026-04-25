@@ -11,12 +11,16 @@ type ClusterItem struct {
 	CanonicalURL  *string   `json:"canonical_url"`
 	Headline      string    `json:"headline"`
 	Summary       string    `json:"summary"`
+	FullSummary   *string   `json:"full_summary"`
 	KeyPoints     []string  `json:"key_points"`
 	Topics        []string  `json:"topics"`
 	SourceIDs     []string  `json:"source_ids"`
+	SourceURLs    []string  `json:"source_urls"`
 	ItemCount     int       `json:"item_count"`
 	IsBreaking    bool      `json:"is_breaking"`
+	IsUpdate      bool      `json:"is_update"`
 	CombinedScore float64   `json:"combined_score"`
+	InterestScore float64   `json:"interest_score"`
 }
 
 type FeedResponse struct {
@@ -33,6 +37,7 @@ type ExpandedItem struct {
 	KeyPoints   []string `json:"key_points"`
 	SourceURLs  []string `json:"source_urls"`
 	Topics      []string `json:"topics"`
+	Excerpt     *string  `json:"excerpt"`
 }
 
 type ReadEventBody struct {

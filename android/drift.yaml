@@ -1,0 +1,4 @@
+app:
+  name: "News"
+  id: "au.org.home.newsapp"
+  allow_http: true

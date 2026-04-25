@@ -81,7 +81,7 @@ android-deps:
 	cd $(ANDROID_DIR) && go mod download
 
 android-run: android-deps
-	cd $(ANDROID_DIR) && go run ./cmd/newsapp
+	cd $(ANDROID_DIR) && go run .
 
 android-apk: android-deps
 	cd $(ANDROID_DIR) && drift build android -o $(APK_OUT)

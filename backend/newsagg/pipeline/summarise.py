@@ -33,6 +33,25 @@ Reply ONLY with valid JSON, no other text:
   "topics": ["<tag1>", "<tag2>"]
 }}"""
 
+_EXCERPT_PROMPT = """\
+You are writing a deeper reading section for a news story that already has a short summary and key points.
+Rules:
+- Do NOT repeat information already in the summary or key points below.
+- Write 3-6 sentences giving additional context, background, or detail.
+- Focus on the "why" and "how", not the "what" (that's already covered).
+- No filler phrases. Plain language.
+
+Existing summary: {summary}
+Existing key points: {key_points}
+
+Full article text (may be truncated):
+{body}
+
+Reply ONLY with valid JSON, no other text:
+{{
+  "excerpt": "<3-6 sentences of non-redundant additional context>"
+}}"""
+
 _MERGE_PROMPT = """\
 You are merging {n} news articles covering the same story for display on an eink reader.
 Rules:
@@ -132,6 +151,21 @@ def summarise_single(title: str, body: str, cfg: "OllamaConfig") -> dict:
             "key_points": [],
             "topics": [],
         }
+
+
+def summarise_excerpt(summary: str, key_points: list[str], body: str, cfg: "OllamaConfig") -> str:
+    """Return a non-redundant deeper excerpt from article body."""
+    prompt = _EXCERPT_PROMPT.format(
+        summary=summary or "",
+        key_points="; ".join(key_points) if key_points else "none",
+        body=(body or "")[:6000],
+    )
+    try:
+        result = _generate(prompt, cfg)
+        return result.get("excerpt") or ""
+    except Exception as exc:
+        logger.warning("Excerpt generation failed: %s", exc)
+        return ""
 
 
 def summarise_cluster(articles: list[dict], cfg: "OllamaConfig") -> dict:

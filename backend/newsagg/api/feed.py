@@ -47,7 +47,8 @@ async def get_feed(
     con = database.get()
     refresh_scores(con)
 
-    conditions = ["1=1"]
+    # Default: hide read items unless updated since last read
+    conditions = ["(read_at IS NULL OR (is_update = TRUE AND updated_at > read_at))"]
     params = []
 
     if since:
@@ -69,8 +70,13 @@ async def get_feed(
         f"""
         SELECT id, created_at, updated_at, first_seen_at, latest_seen_at,
                canonical_url, headline, summary, key_points, topics,
-               source_ids, item_count, is_breaking, combined_score
-        FROM clusters
+               source_ids, item_count, is_breaking, combined_score,
+               interest_score, coalesce(is_update, FALSE), full_summary,
+               (SELECT list(url) FROM (
+                   SELECT DISTINCT url FROM raw_items
+                   WHERE cluster_id = c.id AND url IS NOT NULL LIMIT 5
+               ))
+        FROM clusters c
         WHERE {where}
         ORDER BY combined_score DESC
         LIMIT ? OFFSET ?
@@ -125,4 +131,8 @@ def _row_to_cluster(r) -> ClusterItem:
         item_count=r[11],
         is_breaking=r[12],
         combined_score=r[13] or 0.0,
+        interest_score=r[14] or 0.5,
+        is_update=bool(r[15]),
+        full_summary=r[16] or None,
+        source_urls=r[17] or [],
     )

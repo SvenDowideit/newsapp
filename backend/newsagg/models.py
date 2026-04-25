@@ -39,7 +39,11 @@ class ClusterItem(BaseModel):
     source_ids: list[str]
     item_count: int
     is_breaking: bool
+    is_update: bool
     combined_score: float
+    interest_score: float
+    full_summary: str | None = None
+    source_urls: list[str] = []
 
 
 class FeedResponse(BaseModel):
@@ -65,6 +69,7 @@ class ExpandedItem(BaseModel):
     key_points: list[str]
     source_urls: list[str]
     topics: list[str]
+    excerpt: str | None = None
 
 
 class TopicSummary(BaseModel):

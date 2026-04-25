@@ -82,6 +82,36 @@ _HTML = r"""<!DOCTYPE html>
     margin-right: 6px;
     vertical-align: middle;
   }
+  .update-badge {
+    display: inline-block;
+    background: #444;
+    color: #fff;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 1px 5px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  /* Interest bar: thin coloured strip */
+  .interest-bar-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    vertical-align: middle;
+    margin-left: 6px;
+  }
+  .interest-bar-track {
+    width: 48px;
+    height: 6px;
+    background: #ddd;
+    border: 1px solid #aaa;
+    display: inline-block;
+  }
+  .interest-bar-fill {
+    height: 100%;
+    background: #000;
+  }
+  .interest-val { font-size: 11px; color: var(--meta); }
 
   /* ── Item (reading) view ── */
   #item-view {
@@ -110,6 +140,14 @@ _HTML = r"""<!DOCTYPE html>
     padding-top: 12px;
     border-top: 1px solid var(--border);
   }
+  #item-content .source-links {
+    margin-top: 12px;
+    font-size: 13px;
+    word-break: break-all;
+    position: relative;
+    z-index: 20;
+  }
+  #item-content .source-links a { color: var(--meta); }
   #item-content .item-meta-line {
     font-size: 13px;
     color: var(--meta);
@@ -338,6 +376,13 @@ async function loadFeed() {
 }
 
 // ── Feed view ─────────────────────────────────────────────────────────────
+function interestBarHtml(score) {
+  const pct = Math.round((score || 0.5) * 100);
+  return `<span class="interest-bar-wrap" title="Interest score ${pct}%">` +
+    `<span class="interest-bar-track"><span class="interest-bar-fill" style="width:${pct}%"></span></span>` +
+    `<span class="interest-val">${pct}%</span></span>`;
+}
+
 function renderFeed() {
   const el = document.getElementById('feed-view');
   if (!feed.length) { el.innerHTML = '<div id="loading">No items yet.</div>'; return; }
@@ -345,10 +390,14 @@ function renderFeed() {
     <div class="feed-item" onclick="openItem(${i})">
       <div class="headline">
         ${item.is_breaking ? '<span class="breaking-badge">BREAKING</span>' : ''}
+        ${item.is_update   ? '<span class="update-badge">UPDATE</span>'   : ''}
         ${esc(item.headline)}
       </div>
       <div class="summary">${esc(item.summary)}</div>
-      <div class="item-meta">${esc((item.topics||[]).join(' · '))} &nbsp;·&nbsp; ${item.item_count} source${item.item_count>1?'s':''}</div>
+      <div class="item-meta">
+        ${esc((item.topics||[]).join(' · '))} &nbsp;·&nbsp; ${item.item_count} source${item.item_count>1?'s':''}
+        ${interestBarHtml(item.interest_score)}
+      </div>
     </div>`).join('');
 }
 
@@ -380,38 +429,50 @@ function renderItem() {
   const src = (item.source_ids||[]).join(', ') || 'unknown';
   const topics = (item.topics||[]).join(' · ');
 
-  let kpHtml = '';
-  if ((item.key_points||[]).length) {
-    kpHtml = `<div class="key-points"><ul>${
-      item.key_points.map(p => `<li>${esc(p)}</li>`).join('')
-    }</ul></div>`;
-  }
-
   let expandedHtml = '';
   if (expanded) {
-    let ekp = '';
-    if ((expanded.key_points||[]).length) {
-      ekp = `<ul>${expanded.key_points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>`;
-    }
-    const links = (expanded.source_urls||[]).map(u =>
-      `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`
-    ).join('<br>');
-    expandedHtml = `<div class="expanded-section">
-      <p>${esc(expanded.full_summary)}</p>
-      ${ekp}
-      ${links ? '<p style="margin-top:10px;font-size:14px">'+links+'</p>' : ''}
-    </div>`;
+    // Show non-redundant excerpt if available
+    const excerptText = expanded.excerpt
+      ? `<p>${esc(expanded.excerpt)}</p>`
+      : `<p style="color:var(--meta);font-style:italic">No additional context available.</p>`;
+    expandedHtml = `<div class="expanded-section">${excerptText}</div>`;
+  }
+
+  // Source links: prefer expanded urls (more complete), fall back to item's own
+  const sourceUrls = (expanded && (expanded.source_urls||[]).length)
+    ? expanded.source_urls : (item.source_urls||[]);
+  const linksHtml = sourceUrls.length
+    ? `<p class="source-links">${sourceUrls.map(u =>
+        `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`
+      ).join('<br>')}</p>`
+    : '';
+
+  // Use full_summary (from a previous expand) as the body if available
+  const bodyText = item.full_summary || item.summary;
+
+  // Only show key_points from expanded response if they differ; otherwise use item's
+  const kpSource = (expanded && (expanded.key_points||[]).length) ? expanded.key_points : (item.key_points||[]);
+  let kpHtml = '';
+  if (kpSource.length) {
+    kpHtml = `<div class="key-points"><ul>${
+      kpSource.map(p => `<li>${esc(p)}</li>`).join('')
+    }</ul></div>`;
   }
 
   document.getElementById('item-content').innerHTML = `
     <div class="item-headline">
       ${item.is_breaking ? '<span class="breaking-badge">BREAKING</span>' : ''}
+      ${item.is_update   ? '<span class="update-badge">UPDATE</span>'   : ''}
       ${esc(item.headline)}
     </div>
-    <p>${esc(item.summary)}</p>
+    <p>${esc(bodyText)}</p>
     ${kpHtml}
     ${expandedHtml}
-    <div class="item-meta-line">${esc(topics)} &nbsp;·&nbsp; ${src} &nbsp;·&nbsp; ${item.item_count} source${item.item_count>1?'s':''}</div>
+    ${linksHtml}
+    <div class="item-meta-line">
+      ${esc(topics)} &nbsp;·&nbsp; ${src} &nbsp;·&nbsp; ${item.item_count} source${item.item_count>1?'s':''}
+      ${interestBarHtml(item.interest_score)}
+    </div>
   `;
 
   document.getElementById('topbar-meta').textContent =

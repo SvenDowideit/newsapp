@@ -250,7 +250,9 @@ def _append_to_cluster(
             key_points     = ?,
             topics         = ?,
             source_ids     = ?,
-            item_count     = ?
+            item_count     = ?,
+            -- Mark as update if the cluster was previously read
+            is_update      = CASE WHEN read_at IS NOT NULL THEN TRUE ELSE is_update END
         WHERE id = ?
         """,
         [

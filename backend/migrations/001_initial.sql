@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS clusters (
     recency_score  DOUBLE DEFAULT 0,
     interest_score DOUBLE DEFAULT 0,
     combined_score DOUBLE DEFAULT 0,
-    scored_at      TIMESTAMPTZ
+    scored_at      TIMESTAMPTZ,
+    read_at        TIMESTAMPTZ,
+    is_update      BOOLEAN DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_clusters_combined_score ON clusters(combined_score DESC);
 CREATE INDEX IF NOT EXISTS idx_clusters_latest_seen_at ON clusters(latest_seen_at DESC);

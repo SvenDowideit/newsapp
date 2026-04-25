@@ -9,7 +9,6 @@ import (
 	"github.com/go-drift/drift/pkg/layout"
 	"github.com/go-drift/drift/pkg/widgets"
 )
-
 // FeedPage renders the list of items in the feed.
 // onSelect is called with the item index when an item is tapped.
 func FeedPage(items []models.ClusterItem, onSelect func(int)) core.Widget {
@@ -27,7 +26,11 @@ func FeedPage(items []models.ClusterItem, onSelect func(int)) core.Widget {
 		headline := it.Headline
 		if it.IsBreaking {
 			headline = "BREAKING  " + headline
+		} else if it.IsUpdate {
+			headline = "UPDATE  " + headline
 		}
+
+		interestPct := int(it.InterestScore * 100)
 
 		sourceStr := strings.Join(it.SourceIDs, ", ")
 		if len(it.SourceIDs) == 0 {
@@ -45,7 +48,7 @@ func FeedPage(items []models.ClusterItem, onSelect func(int)) core.Widget {
 						widgets.Text{Content: it.Summary, Style: BodyStyle()},
 						widgets.VSpace(4),
 						widgets.Text{
-							Content: fmt.Sprintf("%s · %d sources", sourceStr, it.ItemCount),
+							Content: fmt.Sprintf("%s · %d sources · interest %d%%", sourceStr, it.ItemCount, interestPct),
 							Style:   MetaStyle(),
 						},
 					},

@@ -200,10 +200,11 @@ A browser-based fallback UI is available at **`http://localhost:8000/ui`** once 
 - **Tap left / right zones** or **← →** keys: previous/next page within item
 - **Swipe up/down** or **J/K** keys: next/previous item
 - **Swipe left** or **D**: discard item
-- **Swipe right** or **E**: expand (fetch full summary)
-- **Long press** or **M**: context menu (save, send link, interest up/down)
-- **+/-**: interest up/down
+- **Swipe right** or **E**: expand (fetch full summary + auto-discover RSS)
+- **Long press** or **M**: context menu (save, send link, more/less like this, discard)
+- **+/-**: interest up/down for current item's topics
 - **R**: refresh feed
+- **? or /**: open keyboard shortcut help overlay
 
 Breaking news is pushed live via SSE and shown as a toast.
 
@@ -302,7 +303,7 @@ Set `db_path = "/data/news.duckdb"` in `config.toml` when using Docker.
 
 ### Fetch pipeline
 1. **Adaptive scheduler** polls each source on its own EMA-derived interval (sources that update frequently are polled more often; silent sources back off exponentially). When you are actively reading, all intervals are shortened by `active_reader_boost`.
-2. **Fetcher** retrieves items from the source (RSS, scrape, API, etc.) and persists raw items to `raw_items`.
+2. **Fetcher** retrieves items and resolves redirect wrappers (Google News, t.co, bit.ly, etc.) to final canonical URLs before persisting to `raw_items`. HTML fetched during redirect resolution is scanned for RSS/Atom feeds, which are automatically added as sources.
 
 ### Deduplication pipeline (3 gates)
 1. **Hash gate** — SHA-256 of normalised URL + title: instant O(1) duplicate skip.
@@ -310,7 +311,15 @@ Set `db_path = "/data/news.duckdb"` in `config.toml` when using Docker.
 3. **Cluster gate** — LLM prompt asks whether the item belongs to an existing nearby cluster (by embedding proximity). If confidence ≥ 0.70, append to cluster and re-summarise. Otherwise create a new cluster.
 
 ### Interest model
-Every interaction (read, discard, follow, save, interest_up/down) updates per-topic weights in `interest_weights`. Weights decay toward 0.5 globally on each event. The feed is ranked by `0.4 × recency + 0.6 × interest`.
+Every interaction (read, discard, follow, save, interest_up/down) updates per-topic weights in `interest_weights`. Weights decay toward 0.5 globally on each event. The feed is ranked by `0.4 × recency + 0.6 × interest`. Interest scores (0–100%) are shown in both the web UI and Android app.
+
+### Read tracking
+- Items are hidden from the feed once read (`read_at` is set).
+- If a cluster receives new stories after being read, it reappears with an **UPDATE** badge.
+- Expanding an item fetches a full article summary and also auto-discovers RSS feeds from that page.
+
+### RSS autodiscovery
+When expanding an item or resolving a redirect that returns HTML, the backend scans for `<link rel="alternate" type="application/rss+xml|atom+xml">` tags and automatically registers new feeds as sources.
 
 ---
 
@@ -327,7 +336,9 @@ news/
 │   ├── newsagg.service          ← systemd unit
 │   ├── Dockerfile
 │   ├── migrations/
-│   │   └── 001_initial.sql
+│   │   ├── 001_initial.sql
+│   │   ├── 002_no_fk.sql        ← drops FK constraints for DuckDB compatibility
+│   │   └── 003_read_tracking.sql ← adds read_at + is_update columns
 │   └── newsagg/
 │       ├── main.py              ← FastAPI app entry point
 │       ├── config.py            ← TOML config loader
@@ -343,6 +354,8 @@ news/
 │       │   └── webui.py         ← GET /ui  (browser fallback UI)
 │       ├── fetcher/
 │       │   ├── scheduler.py     ← adaptive multi-threaded scheduler
+│       │   ├── hashing.py       ← URL normalisation, dedup hashing, redirect resolution
+│       │   ├── rss_discovery.py ← auto-discover RSS feeds from HTML pages
 │       │   ├── rss.py
 │       │   ├── google_news.py
 │       │   ├── hackernews.py
@@ -358,8 +371,9 @@ news/
 │           └── summarise.py     ← Ollama summarisation prompts
 └── android/
     ├── Dockerfile               ← Docker build environment (full Android SDK)
+    ├── drift.yaml               ← Drift app config (name, id, permissions)
     ├── go.mod
-    ├── cmd/newsapp/main.go      ← app entry point
+    ├── main.go                  ← app entry point (must be at root for Drift bridge)
     └── internal/
         ├── api/                 ← HTTP client + response models
         ├── cache/               ← bbolt offline cache

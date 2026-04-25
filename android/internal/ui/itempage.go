@@ -30,7 +30,14 @@ func ItemPage(
 	var blocks []string
 	blocks = append(blocks, item.Headline)
 	blocks = append(blocks, "")
-	blocks = append(blocks, item.Summary)
+
+	// Use full_summary (from a previous expand) if available, else short summary
+	body := item.Summary
+	if item.FullSummary != nil && *item.FullSummary != "" {
+		body = *item.FullSummary
+	}
+	blocks = append(blocks, body)
+
 	if len(item.KeyPoints) > 0 {
 		blocks = append(blocks, "")
 		for _, kp := range item.KeyPoints {
@@ -39,14 +46,33 @@ func ItemPage(
 	}
 	if expanded != nil {
 		blocks = append(blocks, "")
-		blocks = append(blocks, "── Full article ──")
-		blocks = append(blocks, expanded.FullSummary)
+		blocks = append(blocks, "── More context ──")
+		if expanded.Excerpt != nil && *expanded.Excerpt != "" {
+			blocks = append(blocks, *expanded.Excerpt)
+		} else {
+			blocks = append(blocks, expanded.FullSummary)
+		}
+	}
+
+	// Source URLs: prefer expanded urls, fall back to item's own
+	urls := item.SourceURLs
+	if expanded != nil && len(expanded.SourceURLs) > 0 {
+		urls = expanded.SourceURLs
+	}
+	if len(urls) > 0 {
+		blocks = append(blocks, "")
+		for _, u := range urls {
+			blocks = append(blocks, u)
+		}
 	}
 
 	topics := strings.Join(item.Topics, " · ")
-	meta := fmt.Sprintf("%s · %d sources", topics, item.ItemCount)
+	interestPct := int(item.InterestScore * 100)
+	meta := fmt.Sprintf("%s · %d sources · interest %d%%", topics, item.ItemCount, interestPct)
 	if item.IsBreaking {
 		meta = "BREAKING · " + meta
+	} else if item.IsUpdate {
+		meta = "UPDATE · " + meta
 	}
 
 	pages := paginateBlocks(blocks, linesPerPage)
