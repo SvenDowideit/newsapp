@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SvenDowideit/newsapp/android/internal/api/models"
 	"github.com/go-drift/drift"
-	"github.com/svenDowideit/newsapp/internal/api/models"
 )
 
 const linesPerPage = 18 // approximate lines per eink screen
@@ -88,12 +88,12 @@ func ItemPage(
 			drift.GestureDetector(
 				drift.SizedBox(drift.Size{Width: 80, Height: -1}),
 				drift.GestureCallbacks{
-					OnTap:     func() { onGesture("prev_page") },
-					OnSwipeUp: func() { onGesture("next_item") },
-					OnSwipeDown: func() { onGesture("prev_item") },
-					OnSwipeLeft: func() { onGesture("discard") },
+					OnTap:        func() { onGesture("prev_page") },
+					OnSwipeUp:    func() { onGesture("next_item") },
+					OnSwipeDown:  func() { onGesture("prev_item") },
+					OnSwipeLeft:  func() { onGesture("discard") },
 					OnSwipeRight: func() { onGesture("expand") },
-					OnLongPress: func() { onGesture("menu") },
+					OnLongPress:  func() { onGesture("menu") },
 				},
 			),
 			drift.Position{Left: 0, Top: 0, Bottom: 0},
@@ -103,12 +103,12 @@ func ItemPage(
 			drift.GestureDetector(
 				drift.SizedBox(drift.Size{Width: 80, Height: -1}),
 				drift.GestureCallbacks{
-					OnTap:     func() { onGesture("next_page") },
-					OnSwipeUp: func() { onGesture("next_item") },
-					OnSwipeDown: func() { onGesture("prev_item") },
-					OnSwipeLeft: func() { onGesture("discard") },
+					OnTap:        func() { onGesture("next_page") },
+					OnSwipeUp:    func() { onGesture("next_item") },
+					OnSwipeDown:  func() { onGesture("prev_item") },
+					OnSwipeLeft:  func() { onGesture("discard") },
 					OnSwipeRight: func() { onGesture("expand") },
-					OnLongPress: func() { onGesture("menu") },
+					OnLongPress:  func() { onGesture("menu") },
 				},
 			),
 			drift.Position{Right: 0, Top: 0, Bottom: 0},

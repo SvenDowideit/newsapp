@@ -6,7 +6,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/svenDowideit/newsapp/internal/api/models"
+	"github.com/SvenDowideit/newsapp/android/internal/api/models"
 )
 
 var bucketItems = []byte("items")

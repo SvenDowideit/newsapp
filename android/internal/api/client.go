@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/svenDowideit/newsapp/internal/api/models"
+	"github.com/SvenDowideit/newsapp/android/internal/api/models"
 )
 
 // Client talks to the newsagg backend REST API.

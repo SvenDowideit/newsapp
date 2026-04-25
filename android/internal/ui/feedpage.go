@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SvenDowideit/newsapp/android/internal/api/models"
 	"github.com/go-drift/drift"
-	"github.com/svenDowideit/newsapp/internal/api/models"
 )
 
 // FeedPage renders the list of items in the feed.

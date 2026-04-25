@@ -6,17 +6,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/SvenDowideit/newsapp/android/android/internal/cache"
+	appstate "github.com/SvenDowideit/newsapp/android/android/internal/state"
+	"github.com/SvenDowideit/newsapp/android/android/internal/ui"
 	"github.com/go-drift/drift"
-	"github.com/svenDowideit/newsapp/internal/api/models"
-	"github.com/svenDowideit/newsapp/internal/cache"
-	appstate "github.com/svenDowideit/newsapp/internal/state"
-	"github.com/svenDowideit/newsapp/internal/ui"
 )
 
 const (
-	defaultAPIURL   = "http://100.64.0.1:8000" // Tailscale default range
-	cacheFile       = "newsapp.db"
-	prefetchCount   = 50
+	defaultAPIURL = "http://100.64.0.1:8000" // Tailscale default range
+	cacheFile     = "newsapp.db"
+	prefetchCount = 50
 )
 
 func main() {

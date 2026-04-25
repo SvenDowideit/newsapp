@@ -3,9 +3,9 @@ package state
 import (
 	"sync"
 
-	"github.com/svenDowideit/newsapp/internal/api"
-	"github.com/svenDowideit/newsapp/internal/api/models"
-	"github.com/svenDowideit/newsapp/internal/cache"
+	"github.com/SvenDowideit/newsapp/android/internal/api"
+	"github.com/SvenDowideit/newsapp/android/internal/api/models"
+	"github.com/SvenDowideit/newsapp/android/internal/cache"
 )
 
 // Page identifies the current screen.
@@ -24,8 +24,8 @@ type App struct {
 
 	CurrentPage  Page
 	FeedItems    []models.ClusterItem
-	CurrentIndex int   // index into FeedItems
-	ItemPage     int   // page number within current item's paginated text
+	CurrentIndex int // index into FeedItems
+	ItemPage     int // page number within current item's paginated text
 	ContextOpen  bool
 
 	ExpandedItem *models.ExpandedItem

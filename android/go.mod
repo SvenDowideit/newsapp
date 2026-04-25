@@ -1,4 +1,4 @@
-module github.com/SvenDowideit/newsapp/android
+module github.com/SvenDowideit/newsapp/android/android
 
 go 1.24.0
 
