@@ -55,13 +55,13 @@ def resolve_url(url: str | None) -> tuple[str | None, str | None]:
         }
         try:
             resp = httpx.head(url, headers=headers, timeout=10,
-                              follow_redirects=True, max_redirects=10)
+                              follow_redirects=True)
             final = str(resp.url)
             # HEAD succeeded — if we landed somewhere new, GET the final page for RSS discovery
             if final != url:
                 try:
                     get_resp = httpx.get(final, headers=headers, timeout=10,
-                                         follow_redirects=True, max_redirects=5)
+                                         follow_redirects=True)
                     ct = get_resp.headers.get("content-type", "")
                     if "html" in ct:
                         html = get_resp.text
@@ -69,7 +69,7 @@ def resolve_url(url: str | None) -> tuple[str | None, str | None]:
                     pass
         except Exception:
             resp = httpx.get(url, headers=headers, timeout=10,
-                             follow_redirects=True, max_redirects=10)
+                             follow_redirects=True)
             final = str(resp.url)
             ct = resp.headers.get("content-type", "")
             if "html" in ct:

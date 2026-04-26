@@ -11,15 +11,15 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# Per-process cache: domains we've already scanned (avoids re-fetching every article from the same site)
+# In-process cache of domains already scanned this run (backed by DB across restarts)
 _scanned_domains: set[str] = set()
 _scan_lock = threading.Lock()
 
 
-def autodiscover_rss(page_url: str, html: str, con) -> None:
-    """
-    Parse HTML for RSS/Atom <link rel="alternate"> tags and auto-add any new
-    feeds as sources. Skips feeds whose URL is already registered.
+def autodiscover_rss(page_url: str, html: str, con) -> int:
+    """Parse HTML for RSS/Atom <link rel="alternate"> tags and auto-add new sources.
+
+    Returns the number of new feeds registered.
     """
     soup = BeautifulSoup(html, "html.parser")
     rss_types = {"application/rss+xml", "application/atom+xml", "application/rdf+xml"}
@@ -34,7 +34,7 @@ def autodiscover_rss(page_url: str, html: str, con) -> None:
                 found.append((href, title))
 
     if not found:
-        return
+        return 0
 
     page_domain = urlparse(page_url).netloc
     existing = {
@@ -43,6 +43,7 @@ def autodiscover_rss(page_url: str, html: str, con) -> None:
         ).fetchall() if r[0]
     }
 
+    added = 0
     for feed_url, feed_title in found:
         if feed_url in existing:
             continue
@@ -58,28 +59,78 @@ def autodiscover_rss(page_url: str, html: str, con) -> None:
         )
         logger.info("Auto-discovered RSS feed: %s -> %s", safe_id, feed_url)
         existing.add(feed_url)
+        added += 1
+    return added
+
+
+def _domain_already_scanned(domain: str, con) -> bool:
+    """Check in-process cache first, then DB."""
+    with _scan_lock:
+        if domain in _scanned_domains:
+            return True
+    try:
+        row = con.execute(
+            "SELECT 1 FROM rss_scan_log WHERE url = ?", [f"domain:{domain}"]
+        ).fetchone()
+        if row:
+            with _scan_lock:
+                _scanned_domains.add(domain)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _record_scan(url: str, domain: str, feeds_found: int, con) -> None:
+    """Record the scan in the DB and in-process cache."""
+    with _scan_lock:
+        _scanned_domains.add(domain)
+    try:
+        con.execute(
+            """
+            INSERT INTO rss_scan_log (url, feeds_found) VALUES (?, ?)
+            ON CONFLICT (url) DO UPDATE SET scanned_at = now(), feeds_found = excluded.feeds_found
+            """,
+            [url, feeds_found],
+        )
+        # Also record domain sentinel so we skip it on restart
+        con.execute(
+            """
+            INSERT INTO rss_scan_log (url, feeds_found) VALUES (?, ?)
+            ON CONFLICT (url) DO UPDATE SET scanned_at = now(), feeds_found = excluded.feeds_found
+            """,
+            [f"domain:{domain}", feeds_found],
+        )
+    except Exception as exc:
+        logger.debug("rss_scan_log insert failed: %s", exc)
 
 
 def fetch_and_autodiscover(url: str, con) -> None:
-    """Fetch url's domain once per process and scan for RSS feeds.
+    """Fetch a URL and scan it for RSS feeds, once per domain per process/restart.
 
-    Skips domains already scanned this run, so calling this for every new raw
-    item is cheap — one HTTP GET per domain lifetime.
+    Results (both hits and misses) are persisted to rss_scan_log so the domain
+    is only ever fetched once across backend restarts.
     """
     if not url:
         return
-    domain = urlparse(url).netloc
+    parsed = urlparse(url)
+    domain = parsed.netloc
     if not domain:
         return
-    with _scan_lock:
-        if domain in _scanned_domains:
-            return
-        _scanned_domains.add(domain)
+
+    if _domain_already_scanned(domain, con):
+        return
+
     try:
         headers = {"User-Agent": "newsagg/0.1 (personal aggregator)"}
-        resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True, max_redirects=5)
+        resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
         ct = resp.headers.get("content-type", "")
+        feeds_found = 0
         if "html" in ct:
-            autodiscover_rss(str(resp.url), resp.text, con)
+            feeds_found = autodiscover_rss(str(resp.url), resp.text, con)
+        _record_scan(url, domain, feeds_found, con)
+        logger.debug("RSS scan %s: %d feed(s) found", domain, feeds_found)
     except Exception as exc:
-        logger.debug("fetch_and_autodiscover failed for %s: %s", url, exc)
+        logger.warning("fetch_and_autodiscover failed for %s: %s", url, exc)
+        # Still record the attempt so we don't retry on every item from this domain
+        _record_scan(url, domain, 0, con)

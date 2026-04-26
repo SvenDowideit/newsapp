@@ -49,6 +49,12 @@ def _record_event(cluster_id: int, event_type: str, **kwargs) -> None:
             "UPDATE clusters SET read_at = now(), is_update = FALSE WHERE id = ?",
             [cluster_id],
         )
+    elif event_type in ("interest_up", "interest_down", "expand", "follow", "save"):
+        # Any meaningful interaction implies the item was seen — set read_at if not already set
+        con.execute(
+            "UPDATE clusters SET read_at = now(), is_update = FALSE WHERE id = ? AND read_at IS NULL",
+            [cluster_id],
+        )
     if _cfg:
         interest_model.update(cluster_id, event_type, con, _cfg.interest)
 

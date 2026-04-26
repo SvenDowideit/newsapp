@@ -82,10 +82,50 @@ def _persist_items(items: list[RawItem], con: duckdb.DuckDBPyConnection) -> int:
         chash = content_hash(item.url, item.title)
         uhash = url_hash(item.url)
         thash = title_hash(item.title)
+        # Gate 0: exact content duplicate
         existing = con.execute(
             "SELECT id FROM raw_items WHERE content_hash = ?", [chash]
         ).fetchone()
         if existing:
+            continue
+        # Gate 0b: same URL already clustered under a different title (cross-source same article)
+        url_existing = con.execute(
+            "SELECT id, cluster_id FROM raw_items WHERE url_hash = ? AND cluster_id IS NOT NULL LIMIT 1",
+            [uhash],
+        ).fetchone()
+        if url_existing:
+            existing_raw_id, existing_cluster_id = url_existing
+            # Insert the new raw item as a duplicate, attached to the existing cluster
+            con.execute(
+                """
+                INSERT INTO raw_items
+                    (source_id, url, title, body_text, author, published_at,
+                     url_hash, title_hash, content_hash, duplicate_of, cluster_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    item.source_id, item.url, item.title, item.body_text,
+                    item.author,
+                    item.published_at.replace(tzinfo=timezone.utc) if item.published_at else None,
+                    uhash, thash, chash, existing_raw_id, existing_cluster_id,
+                ],
+            )
+            # Update the cluster's source_ids list to include this new source
+            existing_src = con.execute(
+                "SELECT source_ids FROM clusters WHERE id = ?", [existing_cluster_id]
+            ).fetchone()
+            if existing_src:
+                source_ids = list(existing_src[0] or [])
+                if item.source_id not in source_ids:
+                    source_ids.append(item.source_id)
+                    con.execute(
+                        "UPDATE clusters SET source_ids = ? WHERE id = ?",
+                        [source_ids, existing_cluster_id],
+                    )
+            logger.debug(
+                "URL-duplicate: item from %s merged into cluster %d",
+                item.source_id, existing_cluster_id,
+            )
             continue
         con.execute(
             """
