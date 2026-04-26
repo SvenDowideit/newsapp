@@ -355,9 +355,9 @@ def insert_raw_item(con, source_id: str, url: str | None, title: str | None,
     row = con.execute(
         """
         INSERT INTO raw_items
-            (source_id, url, title, body_text, author, published_at,
+            (id, source_id, url, title, body_text, author, published_at,
              url_hash, title_hash, content_hash, duplicate_of, cluster_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (nextval('seq_raw_items'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
         """,
         [source_id, url, title, body_text, author, published_at,
@@ -462,7 +462,8 @@ def get_embedding_vector(item_id: int, con):
 def insert_embedding(item_id: int, model: str, vector: list, con):
     con.execute(
         """
-        INSERT INTO embeddings (raw_item_id, model, vector) VALUES (?, ?, ?)
+        INSERT INTO embeddings (id, raw_item_id, model, vector)
+        VALUES (nextval('seq_embeddings'), ?, ?, ?)
         ON CONFLICT (raw_item_id) DO NOTHING
         """,
         [item_id, model, vector],
@@ -510,9 +511,9 @@ def insert_cluster(con, first_seen_at, latest_seen_at, canonical_url: str | None
     row = con.execute(
         """
         INSERT INTO clusters
-            (first_seen_at, latest_seen_at, canonical_url, headline, summary,
+            (id, first_seen_at, latest_seen_at, canonical_url, headline, summary,
              key_points, topics, source_ids, item_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        VALUES (nextval('seq_clusters'), ?, ?, ?, ?, ?, ?, ?, ?, 1)
         RETURNING id
         """,
         [first_seen_at, latest_seen_at, canonical_url, headline, summary,
@@ -708,8 +709,8 @@ def insert_read_event(cluster_id: int, event_type: str, duration_seconds,
                       fully_read, metadata_json: str | None, con) -> None:
     con.execute(
         """
-        INSERT INTO read_events (cluster_id, event_type, duration_seconds, fully_read, metadata_json)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO read_events (id, cluster_id, event_type, duration_seconds, fully_read, metadata_json)
+        VALUES (nextval('seq_read_events'), ?, ?, ?, ?, ?)
         """,
         [cluster_id, event_type, duration_seconds, fully_read, metadata_json],
     )
@@ -846,3 +847,16 @@ def insert_rss_source(source_id: str, label: str, feed_url: str, con) -> None:
 
 def source_id_exists(source_id: str, con) -> bool:
     return con.execute("SELECT id FROM sources WHERE id = ?", [source_id]).fetchone() is not None
+
+
+def get_source_config(source_id: str, con):
+    """Return (type, label, config_json) for a source, or None if not found/disabled."""
+    return con.execute(
+        "SELECT type, label, config_json FROM sources WHERE id = ? AND enabled = TRUE",
+        [source_id],
+    ).fetchone()
+    """Return (type, label, config_json) for a source, or None if not found/disabled."""
+    return con.execute(
+        "SELECT type, label, config_json FROM sources WHERE id = ? AND enabled = TRUE",
+        [source_id],
+    ).fetchone()

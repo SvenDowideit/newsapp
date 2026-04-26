@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -171,16 +172,25 @@ async def run_scheduler(cfg: Config, pipeline_fn) -> None:
     source_map = {s.id: s for s in cfg.sources}
     loop = asyncio.get_running_loop()
 
-    logger.info("Scheduler started, watching %d sources", len(source_map))
+    logger.info("Scheduler started, watching %d config sources", len(source_map))
 
     while True:
         try:
             due = await database.arun(database.get_due_sources, priority=database.BG)
 
             for (sid,) in due:
-                if sid not in source_map:
-                    continue
-                src = source_map[sid]
+                src = source_map.get(sid)
+                if src is None:
+                    # Source not in config — may be auto-discovered; load from DB
+                    row = await database.arun(
+                        lambda con, _sid=sid: database.get_source_config(_sid, con),
+                        priority=database.BG,
+                    )
+                    if row is None:
+                        continue
+                    src_type, src_label, src_config_json = row
+                    extra = json.loads(src_config_json) if src_config_json else {}
+                    src = SourceConfig(id=sid, type=src_type, label=src_label, extra=extra)
                 loop.run_in_executor(_executor, run_fetch, src, sched_cfg, pipeline_fn)
 
         except Exception:
