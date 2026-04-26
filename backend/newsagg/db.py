@@ -669,13 +669,19 @@ def refresh_scores(con) -> None:
         SELECT
             c.id,
             exp(-extract(epoch FROM (now() - c.latest_seen_at)) / 86400.0) AS recency,
-            coalesce(avg(w.weight), 0.5) AS interest
+            coalesce(avg(tw.weight), 0.5) AS topic_interest,
+            coalesce(avg(sw.interest), 0.5) AS source_interest
         FROM clusters c
         LEFT JOIN LATERAL (
             SELECT w2.weight
             FROM UNNEST(c.topics) AS t(topic)
             JOIN interest_weights w2 ON w2.topic = t.topic
-        ) w ON TRUE
+        ) tw ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT s.interest
+            FROM UNNEST(c.source_ids) AS sid(id)
+            JOIN sources s ON s.id = sid.id
+        ) sw ON TRUE
         WHERE c.scored_at IS NULL
            OR c.scored_at < now() - INTERVAL '5 minutes'
         GROUP BY c.id, c.latest_seen_at
@@ -683,8 +689,8 @@ def refresh_scores(con) -> None:
     con.execute("""
         UPDATE clusters
         SET recency_score  = s.recency,
-            interest_score = s.interest,
-            combined_score = 0.4 * s.recency + 0.6 * s.interest,
+            interest_score = 0.7 * s.topic_interest + 0.3 * s.source_interest,
+            combined_score = 0.4 * s.recency + 0.6 * (0.7 * s.topic_interest + 0.3 * s.source_interest),
             scored_at      = now()
         FROM _score_update s
         WHERE clusters.id = s.id
@@ -771,6 +777,39 @@ def list_topics(con):
 # ---------------------------------------------------------------------------
 # URL resolve cache
 # ---------------------------------------------------------------------------
+
+def set_topic_interest(topic: str, weight: float, con) -> None:
+    weight = max(0.0, min(1.0, weight))
+    con.execute(
+        """
+        INSERT INTO interest_weights (topic, weight, event_count, last_updated)
+        VALUES (?, ?, 1, now())
+        ON CONFLICT (topic) DO UPDATE SET
+            weight       = excluded.weight,
+            last_updated = now()
+        """,
+        [topic, weight],
+    )
+
+
+def set_source_interest(source_id: str, weight: float, con) -> None:
+    weight = max(0.0, min(1.0, weight))
+    con.execute(
+        "UPDATE sources SET interest = ? WHERE id = ?",
+        [weight, source_id],
+    )
+
+
+def list_source_interests(con):
+    return con.execute(
+        """
+        SELECT id, label, coalesce(interest, 0.5) AS weight
+        FROM sources
+        WHERE enabled = TRUE
+        ORDER BY weight DESC, label
+        """
+    ).fetchall()
+
 
 def load_url_resolve_cache(con) -> list:
     try:

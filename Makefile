@@ -63,7 +63,7 @@ models:
 
 dev: backend-install
 	cd $(BACKEND_DIR) && $(UVICORN) newsagg.main:app \
-		--reload --host 0.0.0.0 --port 8000
+		--reload --host 0.0.0.0 --port 80
 
 run: backend-install
 	cd $(BACKEND_DIR) && $(UVICORN) newsagg.main:app \

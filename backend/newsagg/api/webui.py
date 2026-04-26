@@ -76,7 +76,7 @@ _MANIFEST = """\
 
 _SW_JS = """\
 const CACHE = 'newsagg-v1';
-const SHELL = ['/'];
+const SHELL = ['/', '/interests'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
@@ -295,6 +295,13 @@ _HTML = r"""<!DOCTYPE html>
     z-index: 20;
   }
   #item-content .source-links a { color: var(--meta); }
+  #item-content .src-row { display: inline-flex; align-items: center; gap: 4px; }
+  #item-content .src-ibtn {
+    border: 1px solid var(--border); background: none; cursor: pointer;
+    border-radius: 3px; width: 20px; height: 20px; font-size: 13px;
+    line-height: 1; color: var(--meta); padding: 0;
+  }
+  #item-content .src-ibtn:hover { background: #f0f0f0; }
   #item-content .item-meta-line {
     font-size: 13px;
     color: var(--meta);
@@ -459,6 +466,7 @@ _HTML = r"""<!DOCTYPE html>
     <div class="menu-item" onclick="menuAction('interest_up')">More like this</div>
     <div class="menu-item" onclick="menuAction('interest_down')">Less like this</div>
     <div class="menu-item danger" onclick="menuAction('discard')">Discard</div>
+    <div class="menu-item" onclick="location.href='/interests'">Manage interests…</div>
     <div class="menu-item" onclick="closeMenu()">Cancel</div>
   </div>
 </div>
@@ -616,10 +624,17 @@ function renderItem() {
   const sourceUrls = (expanded && (expanded.source_urls||[]).length)
     ? expanded.source_urls : (item.source_urls||[]);
   const srcLabels = item.source_labels || [];
+  const srcIds = item.source_ids || [];
   const linksHtml = sourceUrls.length
     ? `<p class="source-links">${sourceUrls.map((u, i) => {
         const label = srcLabels[i] || u;
-        return `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>`;
+        const sid = srcIds[i] || '';
+        const sidAttr = sid ? ` data-sid="${esc(sid)}"` : '';
+        return `<span class="src-row">` +
+          `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>` +
+          (sid ? ` <button class="src-ibtn" title="Less interest in this source" onclick="adjustSourceInterest('${esc(sid)}',-1)">−</button>` +
+                 `<button class="src-ibtn" title="More interest in this source" onclick="adjustSourceInterest('${esc(sid)}',1)">+</button>` : '') +
+          `</span>`;
       }).join('<br>')}</p>`
     : '';
 
@@ -722,11 +737,33 @@ function closeMenuIfOutside(e) {
 
 // tracks clusters that got a link-click interest boost this session
 const _linkBoosted = new Set();
+const _sourceWeights = {};  // cache: source_id -> current weight
 
 function onLinkClick(clusterId) {
   if (_linkBoosted.has(clusterId)) return;
   _linkBoosted.add(clusterId);
   post(`/items/${clusterId}/interest`, {direction:'up'});
+}
+
+async function adjustSourceInterest(sourceId, direction) {
+  if (!_sourceWeights[sourceId]) {
+    // fetch current weight on first use
+    try {
+      const rows = await fetch('/topics/sources').then(r => r.json());
+      rows.forEach(s => { _sourceWeights[s.id] = s.weight; });
+    } catch(e) { toast('Failed to load source weights'); return; }
+  }
+  const current = _sourceWeights[sourceId] ?? 0.5;
+  const next = Math.max(0, Math.min(1, current + direction * 0.1));
+  _sourceWeights[sourceId] = next;
+  try {
+    await fetch(`/topics/sources/${encodeURIComponent(sourceId)}/interest`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({weight: next}),
+    });
+    toast(direction > 0 ? 'Source boosted' : 'Source reduced');
+  } catch(e) { toast('Failed to update source interest'); }
 }
 
 async function menuAction(action) {
@@ -882,6 +919,123 @@ connectSSE();
 """
 
 
+_INTERESTS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Interests – newsagg</title>
+<style>
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --bg: #fff; --fg: #111; --meta: #666; --border: #ddd; --accent: #0057b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg);
+         padding: calc(var(--sat) + 12px) 16px calc(var(--sab) + 16px); max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 16px; }
+  h2 { font-size: 15px; color: var(--meta); margin: 20px 0 8px; text-transform: uppercase; letter-spacing: .05em; }
+  a.back { font-size: 14px; color: var(--accent); text-decoration: none; display: inline-block; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .label { flex: 1; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .score { font-size: 13px; color: var(--meta); width: 34px; text-align: right; }
+  .bar-wrap { width: 80px; background: var(--border); border-radius: 4px; height: 6px; flex-shrink: 0; }
+  .bar-fill { height: 6px; border-radius: 4px; background: var(--accent); transition: width .2s; }
+  .btn { border: 1px solid var(--border); background: none; cursor: pointer; border-radius: 4px;
+         width: 28px; height: 28px; font-size: 16px; line-height: 1; color: var(--fg); flex-shrink: 0; }
+  .btn:hover { background: #f0f0f0; }
+  #status { font-size: 13px; color: var(--meta); margin-top: 16px; min-height: 20px; }
+</style>
+</head>
+<body>
+<a class="back" href="/">← Back to feed</a>
+<h1>Interests</h1>
+<h2>Topics</h2>
+<div id="topics-list"><p style="color:var(--meta)">Loading…</p></div>
+<h2>Sources</h2>
+<div id="sources-list"><p style="color:var(--meta)">Loading…</p></div>
+<div id="status"></div>
+<script>
+function pct(w) { return Math.round(w * 100); }
+
+function row(label, weight, onUp, onDown) {
+  const d = document.createElement('div');
+  d.className = 'row';
+  d.innerHTML = `
+    <span class="label" title="${esc(label)}">${esc(label)}</span>
+    <div class="bar-wrap"><div class="bar-fill" style="width:${pct(weight)}%"></div></div>
+    <span class="score">${pct(weight)}%</span>
+    <button class="btn" title="Less interest">−</button>
+    <button class="btn" title="More interest">+</button>`;
+  const [btnDown, btnUp] = d.querySelectorAll('.btn');
+  btnDown.onclick = async () => { const w = await onDown(); updateRow(d, w); };
+  btnUp.onclick   = async () => { const w = await onUp();   updateRow(d, w); };
+  return d;
+}
+
+function updateRow(d, weight) {
+  d.querySelector('.bar-fill').style.width = pct(weight) + '%';
+  d.querySelector('.score').textContent = pct(weight) + '%';
+}
+
+function status(msg) { document.getElementById('status').textContent = msg; }
+
+async function put(path, weight) {
+  const r = await fetch(path, { method: 'PUT', headers: {'Content-Type':'application/json'},
+                                body: JSON.stringify({weight}) });
+  if (!r.ok) throw new Error(r.status);
+}
+
+function clamp(w) { return Math.max(0, Math.min(1, w)); }
+const STEP = 0.1;
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function load() {
+  const [tr, sr] = await Promise.all([
+    fetch('/topics').then(r => r.json()),
+    fetch('/topics/sources').then(r => r.json()),
+  ]);
+
+  const tEl = document.getElementById('topics-list');
+  tEl.innerHTML = '';
+  let tw = {};
+  tr.forEach(t => {
+    tw[t.topic] = t.weight;
+    tEl.appendChild(row(
+      `${t.topic} (${t.item_count})`,
+      t.weight,
+      async () => { const w = clamp(tw[t.topic] + STEP); await put(`/topics/${encodeURIComponent(t.topic)}/interest`, w); tw[t.topic] = w; status('Saved'); return w; },
+      async () => { const w = clamp(tw[t.topic] - STEP); await put(`/topics/${encodeURIComponent(t.topic)}/interest`, w); tw[t.topic] = w; status('Saved'); return w; },
+    ));
+  });
+
+  const sEl = document.getElementById('sources-list');
+  sEl.innerHTML = '';
+  let sw = {};
+  sr.forEach(s => {
+    sw[s.id] = s.weight;
+    sEl.appendChild(row(
+      s.label,
+      s.weight,
+      async () => { const w = clamp(sw[s.id] + STEP); await put(`/topics/sources/${encodeURIComponent(s.id)}/interest`, w); sw[s.id] = w; status('Saved'); return w; },
+      async () => { const w = clamp(sw[s.id] - STEP); await put(`/topics/sources/${encodeURIComponent(s.id)}/interest`, w); sw[s.id] = w; status('Saved'); return w; },
+    ));
+  });
+}
+
+load().catch(e => { document.getElementById('status').textContent = 'Load failed: ' + e; });
+</script>
+</body>
+</html>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -889,6 +1043,11 @@ connectSSE();
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def webui():
     return HTMLResponse(_HTML)
+
+
+@router.get("/interests", response_class=HTMLResponse, include_in_schema=False)
+async def interests_page():
+    return HTMLResponse(_INTERESTS_HTML)
 
 
 @router.get("/manifest.json", include_in_schema=False)
