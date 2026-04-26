@@ -476,13 +476,13 @@ def insert_embedding(item_id: int, model: str, vector: list, con):
     return row[0] if row else None
 
 
-def get_recent_embeddings(item_id: int, con, days: int = 7, limit: int = 500):
+def get_recent_embeddings(item_id: int, con, days: int = 14, limit: int = 1000):
     return con.execute(
         """
         SELECT e.raw_item_id, e.vector
         FROM embeddings e
         JOIN raw_items r ON r.id = e.raw_item_id
-        WHERE r.fetched_at >= now() - INTERVAL '7 days'
+        WHERE r.fetched_at >= now() - INTERVAL '14 days'
           AND r.duplicate_of IS NULL
           AND e.raw_item_id != ?
         LIMIT ?
@@ -495,11 +495,11 @@ def get_recent_embeddings(item_id: int, con, days: int = 7, limit: int = 500):
 # Clusters
 # ---------------------------------------------------------------------------
 
-def get_recent_clusters(con, days: int = 3, limit: int = 10):
+def get_recent_clusters(con, days: int = 14, limit: int = 50):
     return con.execute(
         """
         SELECT id, headline FROM clusters
-        WHERE latest_seen_at >= now() - INTERVAL '3 days'
+        WHERE latest_seen_at >= now() - INTERVAL '14 days'
         ORDER BY latest_seen_at DESC
         LIMIT ?
         """,
