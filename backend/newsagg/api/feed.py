@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from typing import AsyncIterator
 
@@ -59,7 +60,22 @@ async def get_feed(
         return database.get_feed(con, conditions, params, page, page_size)
 
     total, rows = await database.arun(_query, priority=database.UI)
-    items = [_row_to_cluster(r) for r in rows]
+    # Deduplicate clusters with near-identical headlines (keep highest combined_score)
+    seen_headlines: set[str] = set()
+    deduped = []
+    for r in rows:
+        key = re.sub(r'[^a-z0-9]', '', (r[6] or '').lower())
+        if key and key in seen_headlines:
+            continue
+        seen_headlines.add(key)
+        deduped.append(r)
+    items = []
+    for r in deduped:
+        try:
+            items.append(_row_to_cluster(r))
+        except Exception:
+            logger.error("_row_to_cluster failed on row: %r", r)
+            raise
     return FeedResponse(items=items, page=page, page_size=page_size, total=total)
 
 

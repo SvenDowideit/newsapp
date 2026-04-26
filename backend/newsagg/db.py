@@ -513,13 +513,13 @@ def insert_cluster(con, first_seen_at, latest_seen_at, canonical_url: str | None
     row = con.execute(
         """
         INSERT INTO clusters
-            (id, first_seen_at, latest_seen_at, canonical_url, headline, summary,
-             key_points, topics, source_ids, item_count)
-        VALUES (nextval('seq_clusters'), ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            (id, created_at, updated_at, first_seen_at, latest_seen_at, canonical_url,
+             headline, summary, key_points, topics, source_ids, item_count, is_breaking)
+        VALUES (nextval('seq_clusters'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, FALSE)
         RETURNING id
         """,
-        [first_seen_at, latest_seen_at, canonical_url, headline, summary,
-         key_points_json, topics, source_ids],
+        [first_seen_at, first_seen_at, first_seen_at, latest_seen_at, canonical_url,
+         headline, summary, key_points_json, topics, source_ids],
     ).fetchone()
     cid = row[0] if row else None
     logger.debug("insert_cluster: id=%s headline=%r", cid, headline[:60])
@@ -605,30 +605,18 @@ def get_feed(con, conditions: list[str], params: list, page: int, page_size: int
     offset = (page - 1) * page_size
     rows = con.execute(
         f"""
-        WITH ranked AS (
-            SELECT id, created_at, updated_at, first_seen_at, latest_seen_at,
-                   canonical_url, headline, summary, key_points, topics,
-                   source_ids, item_count, is_breaking, combined_score,
-                   interest_score, coalesce(is_update, FALSE) AS is_update, full_summary,
-                   (SELECT list(url) FROM (
-                       SELECT DISTINCT url FROM raw_items
-                       WHERE cluster_id = c.id AND url IS NOT NULL
-                         AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
-                       LIMIT 5
-                   )) AS source_urls,
-                   row_number() OVER (
-                       PARTITION BY lower(regexp_replace(trim(headline), '[^a-z0-9]+', '', 'g'))
-                       ORDER BY combined_score DESC
-                   ) AS rn
-            FROM clusters c
-            WHERE {where}
-        )
         SELECT id, created_at, updated_at, first_seen_at, latest_seen_at,
                canonical_url, headline, summary, key_points, topics,
                source_ids, item_count, is_breaking, combined_score,
-               interest_score, is_update, full_summary, source_urls
-        FROM ranked
-        WHERE rn = 1
+               interest_score, coalesce(is_update, FALSE), full_summary,
+               (SELECT list(url) FROM (
+                   SELECT DISTINCT url FROM raw_items
+                   WHERE cluster_id = c.id AND url IS NOT NULL
+                     AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
+                   LIMIT 5
+               ))
+        FROM clusters c
+        WHERE {where}
         ORDER BY combined_score DESC
         LIMIT ? OFFSET ?
         """,
