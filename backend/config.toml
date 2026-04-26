@@ -27,6 +27,28 @@ learn_rate_save = 0.30
 learn_rate_interest_up = 0.20
 learn_rate_interest_down = -0.15
 
+# Geographic interest boosting.
+# For each level, map place name -> interest weight (0.0=suppress, 0.5=neutral, 1.0=boost).
+# Matching is case-insensitive and partial (e.g. "Queensland" matches "Southeast Queensland").
+[geography.city]
+Brisbane = 0.90
+"Gold Coast" = 0.80
+"Sunshine Coast" = 0.80
+Zurich = 0.90
+Austin = 0.40
+
+[geography.state]
+Queensland = 0.75
+
+[geography.country]
+Australia = 0.65
+Switzerland = 0.65
+Germany = 0.65
+
+[geography.region]
+"Asia-Pacific" = 0.60
+Oceania = 0.60
+
 [[sources]]
 id = "hn"
 type = "hackernews"

@@ -23,6 +23,8 @@ Rules:
 - Start with the most important fact.
 - Key points should each be a specific, concrete fact — not a vague category label.
 - Topics should be 2-5 short lowercase tags.
+- Locations: if the story is about events in a specific place, list the geographic levels that apply.
+  Use real place names only. Omit levels that don't apply (e.g. no city if it's a national story).
 
 Article title: {title}
 Article text (may be truncated):
@@ -33,7 +35,13 @@ Reply ONLY with valid JSON, no other text:
   "headline": "<revised headline, max 12 words>",
   "summary": "<2-5 sentences packed with specific facts>",
   "key_points": ["<specific fact>", "<specific fact>", "<specific fact>"],
-  "topics": ["<tag1>", "<tag2>"]
+  "topics": ["<tag1>", "<tag2>"],
+  "locations": {{
+    "city": "<city name or null>",
+    "state": "<state/province name or null>",
+    "country": "<country name or null>",
+    "region": "<world region e.g. 'Southeast Asia', 'Western Europe' or null>"
+  }}
 }}"""
 
 _EXCERPT_PROMPT = """\
@@ -66,6 +74,8 @@ Rules:
 - Start with the most important fact.
 - Key points should each be a specific, concrete fact.
 - Topics should be 2-5 short lowercase tags.
+- Locations: if the story is about events in a specific place, list the geographic levels that apply.
+  Use real place names only. Omit levels that don't apply.
 
 Articles:
 {articles}
@@ -75,7 +85,13 @@ Reply ONLY with valid JSON, no other text:
   "headline": "<unified headline, max 12 words>",
   "summary": "<2-5 sentences packed with specific facts>",
   "key_points": ["<specific fact>", "<specific fact>", "<specific fact>"],
-  "topics": ["<tag1>", "<tag2>"]
+  "topics": ["<tag1>", "<tag2>"],
+  "locations": {{
+    "city": "<city name or null>",
+    "state": "<state/province name or null>",
+    "country": "<country name or null>",
+    "region": "<world region or null>"
+  }}
 }}"""
 
 

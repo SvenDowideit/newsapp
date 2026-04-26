@@ -32,6 +32,17 @@ class SchedulerConfig:
 
 
 @dataclass
+class GeographyConfig:
+    # Maps place name -> interest weight (0.0-1.0) for each geographic level.
+    # Matching is case-insensitive and partial.
+    # 0.5 = neutral, higher = boost, lower = suppress.
+    city: dict[str, float] = field(default_factory=dict)
+    state: dict[str, float] = field(default_factory=dict)
+    country: dict[str, float] = field(default_factory=dict)
+    region: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass
 class InterestConfig:
     decay_rate: float = 0.01
     learn_rate_read: float = 0.15
@@ -67,6 +78,7 @@ class Config:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     interest: InterestConfig = field(default_factory=InterestConfig)
+    geography: GeographyConfig = field(default_factory=GeographyConfig)
     sources: list[SourceConfig] = field(default_factory=list)
 
 
@@ -84,6 +96,13 @@ def load(path: str | Path = "config.toml") -> Config:
         cfg.scheduler = SchedulerConfig(**sc)
     if i := raw.get("interest"):
         cfg.interest = InterestConfig(**i)
+    if g := raw.get("geography"):
+        cfg.geography = GeographyConfig(
+            city=g.get("city", {}),
+            state=g.get("state", {}),
+            country=g.get("country", {}),
+            region=g.get("region", {}),
+        )
 
     for src in raw.get("sources", []):
         src = dict(src)

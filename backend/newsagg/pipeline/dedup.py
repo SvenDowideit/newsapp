@@ -97,9 +97,9 @@ def _process_item(
     cluster_id, confidence = assign_cluster(title, body, candidates, ollama_cfg)
 
     if cluster_id is not None and confidence >= _CLUSTER_CONF_THRESHOLD:
-        _append_to_cluster(item_id, cluster_id, title, body, url, source_id, ollama_cfg)
+        _append_to_cluster(item_id, cluster_id, title, body, url, source_id, cfg)
     else:
-        _create_cluster(item_id, title, body, url, source_id, ollama_cfg)
+        _create_cluster(item_id, title, body, url, source_id, cfg)
 
 
 def _store_embedding(item_id: int, model: str, vec, con) -> None:
@@ -125,17 +125,61 @@ def _find_embedding_duplicate(vec, rows) -> int | None:
     return best_id if best_sim >= _EMBED_SIM_THRESHOLD else None
 
 
+def _geo_interest_weights(locations: dict, geo_cfg) -> list[tuple[str, float]]:
+    """Return (topic_tag, weight) pairs for any geo locations matching user config."""
+    if not locations or not geo_cfg:
+        return []
+    results = []
+    for level in ("city", "state", "country", "region"):
+        place = locations.get(level)
+        if not place:
+            continue
+        place_lower = place.lower()
+        configured: dict[str, float] = getattr(geo_cfg, level, {})
+        for name, weight in configured.items():
+            if name.lower() in place_lower or place_lower in name.lower():
+                tag = f"geo:{level}:{place_lower}"
+                results.append((tag, weight))
+                break
+    return results
+
+
+def _apply_geo_weights(cluster_id: int, locations: dict, geo_cfg, interest_cfg) -> None:
+    """Seed interest_weights for geo tags matched by user config."""
+    pairs = _geo_interest_weights(locations, geo_cfg)
+    if not pairs:
+        return
+
+    def _write(con):
+        for tag, weight in pairs:
+            database.set_topic_interest(tag, weight, con)
+            logger.debug("geo interest: cluster %d tag=%s weight=%.2f", cluster_id, tag, weight)
+
+    database.run_sync(_write, priority=database.BG)
+
+
 def _create_cluster(
     item_id: int,
     title: str | None,
     body: str | None,
     url: str | None,
     source_id: str,
-    ollama_cfg,
+    cfg,
 ) -> None:
+    ollama_cfg = cfg.ollama
     # ollama call outside DB worker
     result = summarise_single(title or "", body or "", ollama_cfg)
+    locations = result.get("locations") or {}
     now = datetime.now(timezone.utc)
+
+    # Merge geo tags into topics so they participate in interest scoring
+    topics = result.get("topics", [])
+    for level in ("city", "state", "country", "region"):
+        place = locations.get(level)
+        if place:
+            geo_tag = f"geo:{level}:{place.lower()}"
+            if geo_tag not in topics:
+                topics.append(geo_tag)
 
     def _write(con):
         cid = database.insert_cluster(
@@ -143,14 +187,17 @@ def _create_cluster(
             result.get("headline") or title or "Untitled",
             result.get("summary") or "",
             json.dumps(result.get("key_points", [])),
-            result.get("topics", []),
+            topics,
             [source_id],
         )
         if cid:
             database.set_item_cluster(item_id, cid, con)
             logger.debug("Created cluster %d for item %d", cid, item_id)
+        return cid
 
-    database.run_sync(_write, priority=database.BG)
+    cid = database.run_sync(_write, priority=database.BG)
+    if cid:
+        _apply_geo_weights(cid, locations, cfg.geography, cfg.interest)
 
 
 def _append_to_cluster(
@@ -160,8 +207,9 @@ def _append_to_cluster(
     body: str | None,
     url: str | None,
     source_id: str,
-    ollama_cfg,
+    cfg,
 ) -> None:
+    ollama_cfg = cfg.ollama
     # ── DB read — mark item, get articles for summarisation ──────────────────
     def _read(con):
         database.set_item_cluster(item_id, cluster_id, con)
@@ -175,6 +223,7 @@ def _append_to_cluster(
 
     # ollama call outside DB worker
     result = summarise_cluster(article_list, ollama_cfg)
+    locations = result.get("locations") or {}
     now = datetime.now(timezone.utc)
 
     source_ids = list(row[0] or [])
@@ -182,16 +231,25 @@ def _append_to_cluster(
         source_ids.append(source_id)
     item_count = (row[1] or 0) + 1
 
+    topics = result.get("topics", [])
+    for level in ("city", "state", "country", "region"):
+        place = locations.get(level)
+        if place:
+            geo_tag = f"geo:{level}:{place.lower()}"
+            if geo_tag not in topics:
+                topics.append(geo_tag)
+
     database.run_sync(
         lambda con: database.update_cluster(
             con, cluster_id, now,
             result.get("headline") or "",
             result.get("summary") or "",
             json.dumps(result.get("key_points", [])),
-            result.get("topics", []),
+            topics,
             source_ids,
             item_count,
         ),
         priority=database.BG,
     )
+    _apply_geo_weights(cluster_id, locations, cfg.geography, cfg.interest)
     logger.debug("Appended item %d to cluster %d (now %d items)", item_id, cluster_id, item_count)
