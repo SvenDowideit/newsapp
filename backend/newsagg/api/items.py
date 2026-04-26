@@ -119,7 +119,7 @@ async def expand_item(cluster_id: int):
         # Already have full summary — generate a non-redundant deeper excerpt
         if canonical_url and _cfg:
             try:
-                canonical_url, _ = resolve_url(canonical_url)
+                canonical_url, _ = resolve_url(canonical_url, con=con, reason="expand-excerpt")
                 article_text, raw_html = fetch_article_text_with_html(canonical_url)
                 if raw_html:
                     autodiscover_rss(canonical_url, raw_html, con)
@@ -132,7 +132,7 @@ async def expand_item(cluster_id: int):
         # First expand: fetch article, produce fuller summary, store it
         full_summary = summary
         if canonical_url and _cfg:
-            canonical_url, _ = resolve_url(canonical_url)
+            canonical_url, _ = resolve_url(canonical_url, con=con, reason="expand")
             try:
                 article_text, raw_html = fetch_article_text_with_html(canonical_url)
                 if article_text:

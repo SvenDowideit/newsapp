@@ -72,7 +72,7 @@ def _persist_items(items: list[RawItem], con: duckdb.DuckDBPyConnection) -> int:
         # Resolve redirect wrappers (Google News, shorteners, etc.) to final URL.
         # resolve_url returns (final_url, html) — html is non-None when a GET was
         # needed, so we scan it for RSS feeds at no extra cost.
-        final_url, html = resolve_url(item.url)
+        final_url, html = resolve_url(item.url, con=con, reason="ingest")
         item.url = final_url
         if html and final_url:
             try:

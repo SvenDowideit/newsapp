@@ -12,8 +12,6 @@ logger = logging.getLogger(__name__)
 
 # Domains that are known redirect wrappers — always follow their redirects.
 _REDIRECT_DOMAINS = {
-    "news.google.com",
-    "google.com",
     "t.co",
     "bit.ly",
     "tinyurl.com",
@@ -28,14 +26,54 @@ _REDIRECT_DOMAINS = {
 
 _resolve_cache: dict[str, tuple[str, str | None]] = {}
 _resolve_lock = threading.Lock()
+_db_cache_loaded = False
 
 
-def resolve_url(url: str | None) -> tuple[str | None, str | None]:
-    """
-    Follow HTTP redirects for known wrapper domains (Google News, shorteners, etc.).
+def _load_db_cache(con) -> None:
+    """Warm the in-process cache from the DB resolve table (called once per process)."""
+    global _db_cache_loaded
+    with _resolve_lock:
+        if _db_cache_loaded:
+            return
+        _db_cache_loaded = True
+    try:
+        rows = con.execute(
+            "SELECT original_url, resolved_url FROM url_resolve_cache"
+        ).fetchall()
+        with _resolve_lock:
+            for orig, resolved in rows:
+                if orig not in _resolve_cache:
+                    _resolve_cache[orig] = (resolved, None)
+        logger.info("url-resolver: loaded %d cached redirects from DB", len(rows))
+    except Exception as exc:
+        logger.debug("url-resolver: could not load DB cache: %s", exc)
+
+
+def _save_to_db_cache(original: str, resolved: str, con) -> None:
+    try:
+        con.execute(
+            """
+            INSERT INTO url_resolve_cache (original_url, resolved_url)
+            VALUES (?, ?)
+            ON CONFLICT (original_url) DO UPDATE SET resolved_url = excluded.resolved_url, resolved_at = now()
+            """,
+            [original, resolved],
+        )
+    except Exception as exc:
+        logger.debug("url-resolver: could not save to DB cache: %s", exc)
+
+
+def resolve_url(url: str | None, con=None, reason: str = "") -> tuple[str | None, str | None]:
+    """Follow HTTP redirects for known wrapper domains (Google News, shorteners, etc.).
+
     Returns (final_url, html_body_or_None).
-    html_body is populated when a GET was needed (HEAD failed or redirected to HTML).
-    Results are cached per process. Falls back to (original_url, None) on error.
+    html_body is populated when the final page was fetched for RSS discovery.
+    Results are persisted to url_resolve_cache so restarts don't re-fetch.
+
+    Args:
+        url: URL to resolve.
+        con: DuckDB connection for cache persistence (optional).
+        reason: caller context logged alongside the request (e.g. 'ingest', 'expand').
     """
     if not url:
         return url, None
@@ -43,10 +81,16 @@ def resolve_url(url: str | None) -> tuple[str | None, str | None]:
     if domain not in _REDIRECT_DOMAINS:
         return url, None
 
+    if con is not None:
+        _load_db_cache(con)
+
     with _resolve_lock:
         if url in _resolve_cache:
-            return _resolve_cache[url]
+            cached = _resolve_cache[url]
+            logger.debug("url-resolver [%s]: cache hit %s -> %s", reason or "?", url[:60], cached[0][:60] if cached[0] else url)
+            return cached
 
+    tag = f"[{reason}] " if reason else ""
     html: str | None = None
     try:
         headers = {
@@ -54,36 +98,41 @@ def resolve_url(url: str | None) -> tuple[str | None, str | None]:
             "Accept": "text/html,application/xhtml+xml",
         }
         try:
-            resp = httpx.head(url, headers=headers, timeout=10,
-                              follow_redirects=True)
+            logger.debug("url-resolver %sHEAD %s", tag, url[:80])
+            resp = httpx.head(url, headers=headers, timeout=10, follow_redirects=True)
             final = str(resp.url)
-            # HEAD succeeded — if we landed somewhere new, GET the final page for RSS discovery
             if final != url:
+                logger.info("url-resolver %sresolved %s -> %s", tag, url[:60], final[:60])
                 try:
-                    get_resp = httpx.get(final, headers=headers, timeout=10,
-                                         follow_redirects=True)
+                    logger.debug("url-resolver %sGET %s (RSS discovery)", tag, final[:80])
+                    get_resp = httpx.get(final, headers=headers, timeout=10, follow_redirects=True)
                     ct = get_resp.headers.get("content-type", "")
                     if "html" in ct:
                         html = get_resp.text
                 except Exception:
                     pass
+            else:
+                logger.debug("url-resolver %sno redirect: %s", tag, url[:60])
         except Exception:
-            resp = httpx.get(url, headers=headers, timeout=10,
-                             follow_redirects=True)
+            logger.debug("url-resolver %sHEAD failed, falling back to GET: %s", tag, url[:60])
+            resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
             final = str(resp.url)
             ct = resp.headers.get("content-type", "")
             if "html" in ct:
                 html = resp.text
+            if final != url:
+                logger.info("url-resolver %sresolved (GET) %s -> %s", tag, url[:60], final[:60])
     except Exception as exc:
-        logger.debug("URL resolve failed for %s: %s", url, exc)
+        logger.warning("url-resolver %sfailed for %s: %s", tag, url[:60], exc)
         final = url
 
     result = (final, html)
     with _resolve_lock:
         _resolve_cache[url] = result
 
-    if final != url:
-        logger.debug("Resolved %s -> %s", url, final)
+    if con is not None and final != url:
+        _save_to_db_cache(url, final, con)
+
     return result
 
 

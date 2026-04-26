@@ -16,6 +16,7 @@ from . import db as database
 from .config import Config, load as load_config
 from .pipeline.dedup import run_pipeline
 from .fetcher.scheduler import run_scheduler, breaking_news_detector
+from .fetcher.hashing import resolve_url
 from .api import feed as feed_api
 from .api import items as items_api
 from .api.feed import push_event
@@ -59,6 +60,50 @@ def _register_mdns(port: int) -> Zeroconf:
     return zc
 
 
+def _backfill_resolved_urls() -> None:
+    """Resolve any raw_items/clusters still holding unresolved redirect URLs.
+
+    Runs once at startup in a thread. Updates raw_items.url, url_hash,
+    content_hash and clusters.canonical_url in-place.
+    """
+    from .fetcher.hashing import url_hash as _url_hash, content_hash as _content_hash
+    con = database.get()
+    rows = con.execute(
+        """
+        SELECT id, url, title FROM raw_items
+        WHERE (
+               url LIKE '%t.co/%'
+            OR url LIKE '%bit.ly/%'
+            OR url LIKE '%feedburner.com%'
+        )
+        AND url NOT LIKE '%news.google.com%'
+        ORDER BY id DESC
+        LIMIT 2000
+        """
+    ).fetchall()
+    if not rows:
+        return
+    logger.info("startup-backfill: resolving %d unresolved URLs", len(rows))
+    resolved = 0
+    for (rid, url, title) in rows:
+        final, _ = resolve_url(url, con=con, reason="startup-backfill")
+        if final and final != url:
+            new_uhash = _url_hash(final)
+            new_chash = _content_hash(final, title)
+            con.execute(
+                "UPDATE raw_items SET url = ?, url_hash = ?, content_hash = ? WHERE id = ?",
+                [final, new_uhash, new_chash, rid],
+            )
+            # Update cluster canonical_url if it still holds the wrapper URL
+            con.execute(
+                "UPDATE clusters SET canonical_url = ? WHERE canonical_url = ?",
+                [final, url],
+            )
+            resolved += 1
+    if resolved:
+        logger.info("startup-backfill: updated %d items to resolved URLs", resolved)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _config
@@ -69,6 +114,9 @@ async def lifespan(app: FastAPI):
     database.upsert_sources(_config.sources)
 
     items_api.set_config(_config)
+
+    # Resolve any URLs still stored as redirect wrappers from before the cache was added
+    await asyncio.get_running_loop().run_in_executor(None, _backfill_resolved_urls)
 
     zc = await asyncio.get_running_loop().run_in_executor(
         None, _register_mdns, _config.server.port
