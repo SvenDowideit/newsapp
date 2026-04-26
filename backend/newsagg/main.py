@@ -39,23 +39,49 @@ def _pipeline_fn(source_id: str) -> None:
     run_pipeline(source_id, _config)
 
 
+def _get_lan_addresses() -> list[str]:
+    """Return all non-loopback, non-link-local IPv4 addresses on this host."""
+    import ipaddress
+    addrs = []
+    try:
+        for iface_addrs in socket.getaddrinfo(socket.gethostname(), None):
+            ip = iface_addrs[4][0]
+            try:
+                obj = ipaddress.ip_address(ip)
+                if obj.version == 4 and not obj.is_loopback and not obj.is_link_local:
+                    if ip not in addrs:
+                        addrs.append(ip)
+            except ValueError:
+                pass
+    except Exception:
+        pass
+    if not addrs:
+        # fallback: connect to a public address to discover the outbound interface
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            addrs.append(ip)
+        except Exception:
+            pass
+    return addrs or ["127.0.0.1"]
+
+
 def _register_mdns(port: int) -> Zeroconf:
     zc = Zeroconf()
-    try:
-        local_ip = socket.gethostbyname(socket.gethostname())
-    except Exception:
-        local_ip = "127.0.0.1"
-    addr = socket.inet_aton(local_ip)
+    lan_ips = _get_lan_addresses()
+    addresses = [socket.inet_aton(ip) for ip in lan_ips]
     info = ServiceInfo(
         "_http._tcp.local.",
         "newsapp._http._tcp.local.",
-        addresses=[addr],
+        addresses=addresses,
         port=port,
         properties={"path": "/"},
         server="newsapp.local.",
     )
     zc.register_service(info)
-    logger.info("mDNS registered: http://newsapp.local:%d/", port)
+    logger.info("mDNS registered: http://newsapp.local:%d/ (addresses: %s)", port, ", ".join(lan_ips))
     return zc
 
 
