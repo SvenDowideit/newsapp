@@ -611,7 +611,7 @@ function renderItem() {
     ? expanded.source_urls : (item.source_urls||[]);
   const linksHtml = sourceUrls.length
     ? `<p class="source-links">${sourceUrls.map(u =>
-        `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`
+        `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(u)}</a>`
       ).join('<br>')}</p>`
     : '';
 
@@ -712,6 +712,15 @@ function closeMenuIfOutside(e) {
   if (e.target === document.getElementById('menu-overlay')) closeMenu();
 }
 
+// tracks clusters that got a link-click interest boost this session
+const _linkBoosted = new Set();
+
+function onLinkClick(clusterId) {
+  if (_linkBoosted.has(clusterId)) return;
+  _linkBoosted.add(clusterId);
+  post(`/items/${clusterId}/interest`, {direction:'up'});
+}
+
 async function menuAction(action) {
   closeMenu();
   const item = feed[cursor];
@@ -730,6 +739,9 @@ async function menuAction(action) {
       toast('More like this ✓');
       break;
     case 'interest_down':
+      if (_linkBoosted.delete(item.id)) {
+        await post(`/items/${item.id}/interest`, {direction:'down'});
+      }
       await post(`/items/${item.id}/interest`, {direction:'down'});
       toast('Less like this ✓');
       break;
