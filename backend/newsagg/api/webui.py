@@ -1,16 +1,144 @@
 from __future__ import annotations
 
+import struct
+import zlib
+
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Icon generation — solid black PNG, no external dependencies
+# ---------------------------------------------------------------------------
+
+def _solid_png(size: int) -> bytes:
+    """Generate a minimal solid-black PNG of the given size using only stdlib."""
+    # Each row: filter byte (0 = None) + RGB pixels
+    row = b'\x00' + b'\x00\x00\x00' * size
+    raw = row * size
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
+
+    ihdr = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
+    return (
+        b'\x89PNG\r\n\x1a\n'
+        + chunk(b'IHDR', ihdr)
+        + chunk(b'IDAT', zlib.compress(raw))
+        + chunk(b'IEND', b'')
+    )
+
+
+_PNG_192 = _solid_png(192)
+_PNG_512 = _solid_png(512)
+
+
+# ---------------------------------------------------------------------------
+# SVG icon (used in manifest; also fine for <link rel="icon">)
+# ---------------------------------------------------------------------------
+
+_SVG_ICON = """\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" fill="#000"/>
+  <text x="96" y="148" font-family="Georgia,serif" font-size="130"
+        fill="#fff" text-anchor="middle">n</text>
+</svg>"""
+
+
+# ---------------------------------------------------------------------------
+# Web App Manifest
+# ---------------------------------------------------------------------------
+
+_MANIFEST = """\
+{
+  "name": "newsagg",
+  "short_name": "newsagg",
+  "description": "Personal news aggregator",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon.svg",     "sizes": "any",      "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}"""
+
+
+# ---------------------------------------------------------------------------
+# Service worker — cache-first for app shell, network-first for API
+# ---------------------------------------------------------------------------
+
+_SW_JS = """\
+const CACHE = 'newsagg-v1';
+const SHELL = ['/'];
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  // API calls: network-first, no caching
+  if (url.pathname.startsWith('/feed') || url.pathname.startsWith('/items') ||
+      url.pathname.startsWith('/sources') || url.pathname.startsWith('/topics')) {
+    e.respondWith(fetch(e.request).catch(() => new Response('', {status: 503})));
+    return;
+  }
+  // App shell: cache-first, update in background
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      const fresh = fetch(e.request).then(r => {
+        if (r.ok) caches.open(CACHE).then(c => c.put(e.request, r.clone()));
+        return r;
+      });
+      return cached || fresh;
+    })
+  );
+});
+"""
+
+
+# ---------------------------------------------------------------------------
+# HTML
+# ---------------------------------------------------------------------------
 
 _HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>newsagg</title>
+
+<!-- PWA: Android / Chrome -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- PWA: iOS / Safari -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="newsagg">
+<link rel="apple-touch-icon" href="/icon-192.png">
+
+<!-- Favicon -->
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -20,6 +148,11 @@ _HTML = r"""<!DOCTYPE html>
     --meta: #555;
     --border: #ccc;
     --highlight: #000;
+    /* safe-area insets for notched phones */
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
   }
 
   body {
@@ -32,6 +165,10 @@ _HTML = r"""<!DOCTYPE html>
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    /* push content below the status bar on iOS standalone */
+    padding-top: var(--sat);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
   }
 
   /* ── Top bar ── */
@@ -103,7 +240,6 @@ _HTML = r"""<!DOCTYPE html>
     margin-left: 8px;
     vertical-align: middle;
   }
-  /* Interest bar: thin coloured strip */
   .interest-bar-wrap {
     display: inline-flex;
     align-items: center;
@@ -169,6 +305,8 @@ _HTML = r"""<!DOCTYPE html>
   #bottombar {
     border-top: 2px solid var(--fg);
     padding: 6px 16px;
+    /* lift above home indicator on iOS */
+    padding-bottom: calc(6px + var(--sab));
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -248,6 +386,7 @@ _HTML = r"""<!DOCTYPE html>
     background: #fff;
     width: 100%;
     border-top: 2px solid #000;
+    padding-bottom: var(--sab);
   }
   .menu-item {
     padding: 18px 20px;
@@ -261,7 +400,7 @@ _HTML = r"""<!DOCTYPE html>
   /* ── Toast ── */
   #toast {
     position: fixed;
-    bottom: 60px;
+    bottom: calc(60px + var(--sab));
     left: 50%;
     transform: translateX(-50%);
     background: #000;
@@ -370,6 +509,11 @@ let cursor = 0;       // current item index in feed
 let expanded = null;  // expanded item data
 let itemReadStart = null;
 
+// ── Service worker registration ───────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
   await loadFeed();
@@ -444,7 +588,6 @@ function openItem(i) {
   renderItem();
   document.getElementById('feed-view').style.display = 'none';
   document.getElementById('item-view').style.display = 'flex';
-  // Mark as read immediately on open so it won't reappear if we navigate away quickly
   const item = feed[cursor];
   if (item) post(`/items/${item.id}/read`, {duration_seconds: 0, fully_read: false});
 }
@@ -458,14 +601,12 @@ function renderItem() {
 
   let expandedHtml = '';
   if (expanded) {
-    // Show non-redundant excerpt if available
     const excerptText = expanded.excerpt
       ? `<p>${esc(expanded.excerpt)}</p>`
       : `<p style="color:var(--meta);font-style:italic">No additional context available.</p>`;
     expandedHtml = `<div class="expanded-section">${excerptText}</div>`;
   }
 
-  // Source links: prefer expanded urls (more complete), fall back to item's own
   const sourceUrls = (expanded && (expanded.source_urls||[]).length)
     ? expanded.source_urls : (item.source_urls||[]);
   const linksHtml = sourceUrls.length
@@ -474,10 +615,7 @@ function renderItem() {
       ).join('<br>')}</p>`
     : '';
 
-  // Use full_summary (from a previous expand) as the body if available
   const bodyText = item.full_summary || item.summary;
-
-  // Only show key_points from expanded response if they differ; otherwise use item's
   const kpSource = (expanded && (expanded.key_points||[]).length) ? expanded.key_points : (item.key_points||[]);
   let kpHtml = '';
   if (kpSource.length) {
@@ -512,9 +650,9 @@ function renderItem() {
   document.title = item.headline;
 }
 
-// ── Tap zones (mirrors gesture map) ──────────────────────────────────────
-function zoneLeft()  { prevItem(); }   // tap left  → prev item
-function zoneRight() { nextItem(); }   // tap right → next item
+// ── Tap zones ─────────────────────────────────────────────────────────────
+function zoneLeft()  { prevItem(); }
+function zoneRight() { nextItem(); }
 
 // ── Navigation ────────────────────────────────────────────────────────────
 function nextItem() {
@@ -625,13 +763,13 @@ document.addEventListener('touchend', e => {
   if (document.getElementById('item-view').style.display === 'none') return;
 
   const adx = Math.abs(dx), ady = Math.abs(dy);
-  if (adx < 15 && ady < 15 && dur > 600) { openMenu(); return; }  // long press
+  if (adx < 15 && ady < 15 && dur > 600) { openMenu(); return; }
   if (adx > 60 && adx > ady) {
-    if (dx < 0) discardItem();   // swipe left → discard
-    else expandItem();            // swipe right → expand
+    if (dx < 0) discardItem();
+    else expandItem();
   } else if (ady > 60 && ady > adx) {
-    if (dy < 0) nextItem();      // swipe up → next
-    else prevItem();              // swipe down → prev
+    if (dy < 0) nextItem();
+    else prevItem();
   }
 }, {passive: true});
 
@@ -650,11 +788,9 @@ document.addEventListener('keydown', e => {
 
   if (inFeed) {
     if (e.key === 'ArrowDown' || e.key === 'j') {
-      const el = document.getElementById('feed-view');
-      el.scrollTop += 80;
+      document.getElementById('feed-view').scrollTop += 80;
     } else if (e.key === 'ArrowUp' || e.key === 'k') {
-      const el = document.getElementById('feed-view');
-      el.scrollTop -= 80;
+      document.getElementById('feed-view').scrollTop -= 80;
     } else if (e.key === 'Enter' || e.key === 'ArrowRight') {
       openItem(cursor);
     } else if (e.key === 'r' || e.key === 'R') {
@@ -726,6 +862,35 @@ connectSSE();
 """
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def webui():
     return HTMLResponse(_HTML)
+
+
+@router.get("/manifest.json", include_in_schema=False)
+async def manifest():
+    return Response(_MANIFEST, media_type="application/manifest+json")
+
+
+@router.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    return Response(_SW_JS, media_type="application/javascript")
+
+
+@router.get("/icon.svg", include_in_schema=False)
+async def icon_svg():
+    return Response(_SVG_ICON, media_type="image/svg+xml")
+
+
+@router.get("/icon-192.png", include_in_schema=False)
+async def icon_192():
+    return Response(_PNG_192, media_type="image/png")
+
+
+@router.get("/icon-512.png", include_in_schema=False)
+async def icon_512():
+    return Response(_PNG_512, media_type="image/png")
