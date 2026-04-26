@@ -3,21 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 from .. import db as database
 from ..models import FeedResponse, ClusterItem
-from ..ranking import refresh_scores
 from ..fetcher.scheduler import signal_active_reader
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# In-memory SSE subscribers
 _subscribers: list[asyncio.Queue] = []
 
 
@@ -44,46 +42,23 @@ async def get_feed(
     if active:
         signal_active_reader(60)
 
-    con = database.get()
-    refresh_scores(con)
-
-    # Default: hide read items unless updated since last read
     conditions = ["(read_at IS NULL OR (is_update = TRUE AND updated_at > read_at))"]
-    params = []
+    params: list = []
 
     if since:
         conditions.append("latest_seen_at > ?")
         params.append(since)
 
     if topics:
-        # Match if any of the requested topics appears in cluster topics
         topic_conds = " OR ".join(["list_contains(topics, ?)"] * len(topics))
         conditions.append(f"({topic_conds})")
         params.extend(topics)
 
-    where = " AND ".join(conditions)
-    total_row = con.execute(f"SELECT count(*) FROM clusters WHERE {where}", params).fetchone()
-    total = total_row[0] if total_row else 0
+    def _query(con):
+        database.refresh_scores(con)
+        return database.get_feed(con, conditions, params, page, page_size)
 
-    offset = (page - 1) * page_size
-    rows = con.execute(
-        f"""
-        SELECT id, created_at, updated_at, first_seen_at, latest_seen_at,
-               canonical_url, headline, summary, key_points, topics,
-               source_ids, item_count, is_breaking, combined_score,
-               interest_score, coalesce(is_update, FALSE), full_summary,
-               (SELECT list(url) FROM (
-                   SELECT DISTINCT url FROM raw_items
-                   WHERE cluster_id = c.id AND url IS NOT NULL LIMIT 5
-               ))
-        FROM clusters c
-        WHERE {where}
-        ORDER BY combined_score DESC
-        LIMIT ? OFFSET ?
-        """,
-        params + [page_size, offset],
-    ).fetchall()
-
+    total, rows = await database.arun(_query, priority=database.UI)
     items = [_row_to_cluster(r) for r in rows]
     return FeedResponse(items=items, page=page, page_size=page_size, total=total)
 

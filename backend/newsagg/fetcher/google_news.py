@@ -1,41 +1,24 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
+import logging
 
 import feedparser
-from bs4 import BeautifulSoup
+from googlenewsdecoder import gnewsdecoder
 
 from .types import RawItem
 
+logger = logging.getLogger(__name__)
 
-def _extract_real_url(entry) -> str | None:
-    """Extract the real article URL from a Google News RSS entry.
 
-    Google News wraps all article links in a JS-decoded redirect that cannot be
-    resolved server-side with plain HTTP. The real publisher URL is available via:
-      1. <a href> links in the entry summary that point to the source domain
-      2. entry.source.href (publisher homepage — less precise but still better than wrapper)
-    """
-    source_domain = None
-    if hasattr(entry, "source") and entry.source:
-        href = entry.source.get("href", "")
-        if href:
-            source_domain = urlparse(href).netloc
-
-    summary = getattr(entry, "summary", "") or ""
-    if summary and source_domain:
-        soup = BeautifulSoup(summary, "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if source_domain in href and "news.google.com" not in href:
-                return href
-
-    if hasattr(entry, "source") and entry.source:
-        src_href = entry.source.get("href", "")
-        if src_href:
-            return src_href
-
-    return None
+def _decode_url(url: str) -> str:
+    """Decode a Google News wrapper URL to the real article URL."""
+    try:
+        result = gnewsdecoder(url, interval=1)
+        if result.get("status"):
+            return result["decoded_url"]
+    except Exception as exc:
+        logger.debug("googlenewsdecoder failed for %s: %s", url[:80], exc)
+    return url
 
 
 def fetch(source_id: str, query: str) -> list[RawItem]:
@@ -53,7 +36,8 @@ def fetch(source_id: str, query: str) -> list[RawItem]:
         body = getattr(entry, "summary", None) or (
             entry.content[0].get("value") if getattr(entry, "content", None) else None
         )
-        real_url = _extract_real_url(entry) or getattr(entry, "link", None)
+        raw_url = getattr(entry, "link", None)
+        real_url = _decode_url(raw_url) if raw_url else raw_url
         items.append(RawItem(
             source_id=source_id,
             url=real_url,
@@ -63,4 +47,3 @@ def fetch(source_id: str, query: str) -> list[RawItem]:
             published_at=pub,
         ))
     return items
-

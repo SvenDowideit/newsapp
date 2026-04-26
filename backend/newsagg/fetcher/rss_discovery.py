@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import threading
@@ -9,9 +8,10 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from .. import db as database
+
 logger = logging.getLogger(__name__)
 
-# In-process cache of domains already scanned this run (backed by DB across restarts)
 _scanned_domains: set[str] = set()
 _scan_lock = threading.Lock()
 
@@ -19,6 +19,7 @@ _scan_lock = threading.Lock()
 def autodiscover_rss(page_url: str, html: str, con) -> int:
     """Parse HTML for RSS/Atom <link rel="alternate"> tags and auto-add new sources.
 
+    Must be called from inside a DB worker lambda (con is the worker's connection).
     Returns the number of new feeds registered.
     """
     soup = BeautifulSoup(html, "html.parser")
@@ -37,11 +38,7 @@ def autodiscover_rss(page_url: str, html: str, con) -> int:
         return 0
 
     page_domain = urlparse(page_url).netloc
-    existing = {
-        r[0] for r in con.execute(
-            "SELECT config_json->>'$.url' FROM sources WHERE type = 'rss'"
-        ).fetchall() if r[0]
-    }
+    existing = database.get_rss_source_urls(con)
 
     added = 0
     for feed_url, feed_title in found:
@@ -50,87 +47,60 @@ def autodiscover_rss(page_url: str, html: str, con) -> int:
         safe_id = re.sub(r"[^a-z0-9_]", "_", f"rss_{page_domain}").strip("_")[:40]
         base_id = safe_id
         suffix = 0
-        while con.execute("SELECT id FROM sources WHERE id = ?", [safe_id]).fetchone():
+        while database.source_id_exists(safe_id, con):
             suffix += 1
             safe_id = f"{base_id}_{suffix}"
-        con.execute(
-            "INSERT INTO sources (id, type, label, config_json) VALUES (?, 'rss', ?, ?)",
-            [safe_id, f"{feed_title} (auto)", json.dumps({"url": feed_url})],
-        )
+        database.insert_rss_source(safe_id, feed_title, feed_url, con)
         logger.info("Auto-discovered RSS feed: %s -> %s", safe_id, feed_url)
         existing.add(feed_url)
         added += 1
     return added
 
 
-def _domain_already_scanned(domain: str, con) -> bool:
-    """Check in-process cache first, then DB."""
-    with _scan_lock:
-        if domain in _scanned_domains:
-            return True
-    try:
-        row = con.execute(
-            "SELECT 1 FROM rss_scan_log WHERE url = ?", [f"domain:{domain}"]
-        ).fetchone()
-        if row:
-            with _scan_lock:
-                _scanned_domains.add(domain)
-            return True
-    except Exception:
-        pass
-    return False
+def fetch_and_autodiscover(url: str) -> None:
+    """Fetch url (HTTP only) and submit RSS discovery to the DB worker.
 
-
-def _record_scan(url: str, domain: str, feeds_found: int, con) -> None:
-    """Record the scan in the DB and in-process cache."""
-    with _scan_lock:
-        _scanned_domains.add(domain)
-    try:
-        con.execute(
-            """
-            INSERT INTO rss_scan_log (url, feeds_found) VALUES (?, ?)
-            ON CONFLICT (url) DO UPDATE SET scanned_at = now(), feeds_found = excluded.feeds_found
-            """,
-            [url, feeds_found],
-        )
-        # Also record domain sentinel so we skip it on restart
-        con.execute(
-            """
-            INSERT INTO rss_scan_log (url, feeds_found) VALUES (?, ?)
-            ON CONFLICT (url) DO UPDATE SET scanned_at = now(), feeds_found = excluded.feeds_found
-            """,
-            [f"domain:{domain}", feeds_found],
-        )
-    except Exception as exc:
-        logger.debug("rss_scan_log insert failed: %s", exc)
-
-
-def fetch_and_autodiscover(url: str, con) -> None:
-    """Fetch a URL and scan it for RSS feeds, once per domain per process/restart.
-
-    Results (both hits and misses) are persisted to rss_scan_log so the domain
-    is only ever fetched once across backend restarts.
+    The HTTP fetch happens in the calling thread. DB writes go through database.run_sync
+    at priority=BG so they never block foreground requests.
+    Safe to call from any non-DB-worker thread.
     """
     if not url:
         return
-    parsed = urlparse(url)
-    domain = parsed.netloc
+    domain = urlparse(url).netloc
     if not domain:
         return
 
-    if _domain_already_scanned(domain, con):
+    with _scan_lock:
+        if domain in _scanned_domains:
+            return
+
+    already = database.run_sync(
+        lambda con: database.domain_scanned(domain, con), priority=database.BG
+    )
+    if already:
+        with _scan_lock:
+            _scanned_domains.add(domain)
         return
 
+    page_url = url
+    html: str | None = None
     try:
         headers = {"User-Agent": "newsagg/0.1 (personal aggregator)"}
         resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+        page_url = str(resp.url)
         ct = resp.headers.get("content-type", "")
-        feeds_found = 0
         if "html" in ct:
-            feeds_found = autodiscover_rss(str(resp.url), resp.text, con)
-        _record_scan(url, domain, feeds_found, con)
-        logger.debug("RSS scan %s: %d feed(s) found", domain, feeds_found)
+            html = resp.text
     except Exception as exc:
-        logger.warning("fetch_and_autodiscover failed for %s: %s", url, exc)
-        # Still record the attempt so we don't retry on every item from this domain
-        _record_scan(url, domain, 0, con)
+        logger.warning("fetch_and_autodiscover HTTP failed for %s: %s", url, exc)
+
+    def _write(con, _pu=page_url, _h=html, _u=url, _d=domain):
+        feeds_found = 0
+        if _h:
+            feeds_found = autodiscover_rss(_pu, _h, con)
+        database.record_rss_scan(_u, _d, feeds_found, con)
+        logger.debug("RSS scan %s: %d feed(s) found", _d, feeds_found)
+        with _scan_lock:
+            _scanned_domains.add(_d)
+
+    database.run_sync(_write, priority=database.BG)

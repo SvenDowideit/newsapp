@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 
+from .. import db as database
 from .embed import embed
 from .cluster import assign_cluster
 from .summarise import summarise_single, summarise_cluster
@@ -23,17 +24,7 @@ _CLUSTER_CONF_THRESHOLD = 0.70
 
 def run_pipeline(source_id: str, con: duckdb.DuckDBPyConnection, cfg: "Config") -> None:
     """Process all unprocessed raw items for a source through the full pipeline."""
-    items = con.execute(
-        """
-        SELECT id, title, body_text, url, source_id
-        FROM raw_items
-        WHERE cluster_id IS NULL
-          AND duplicate_of IS NULL
-          AND source_id = ?
-        ORDER BY id ASC
-        """,
-        [source_id],
-    ).fetchall()
+    items = database.get_unprocessed_items(source_id, con)
 
     for (item_id, title, body, url, sid) in items:
         try:
@@ -53,11 +44,7 @@ def _process_item(
 ) -> None:
     ollama_cfg = cfg.ollama
 
-    # Gate 2: embedding similarity dedup
-    # Skip if we already embedded this item in a previous (failed) attempt
-    existing_embed = con.execute(
-        "SELECT id FROM embeddings WHERE raw_item_id = ?", [item_id]
-    ).fetchone()
+    existing_embed = database.get_embedding_for_item(item_id, con)
 
     if existing_embed is None:
         text_for_embed = f"{title or ''} {(body or '')[:500]}"
@@ -66,30 +53,15 @@ def _process_item(
         if vec is not None:
             dup_id = _find_embedding_duplicate(item_id, vec, con)
             if dup_id is not None:
-                con.execute(
-                    "UPDATE raw_items SET duplicate_of = ? WHERE id = ?",
-                    [dup_id, item_id],
-                )
+                database.mark_item_duplicate(item_id, dup_id, con)
                 logger.debug("Item %d is embedding-duplicate of %d", item_id, dup_id)
                 return
 
-            con.execute(
-                """
-                INSERT INTO embeddings (raw_item_id, model, vector) VALUES (?, ?, ?)
-                ON CONFLICT (raw_item_id) DO NOTHING
-                """,
-                [item_id, ollama_cfg.embed_model, vec],
-            )
-            embed_row = con.execute(
-                "SELECT id FROM embeddings WHERE raw_item_id = ?", [item_id]
-            ).fetchone()
-            if embed_row:
-                con.execute("UPDATE raw_items SET embed_id = ? WHERE id = ?", [embed_row[0], item_id])
+            embed_id = database.insert_embedding(item_id, ollama_cfg.embed_model, vec, con)
+            if embed_id:
+                database.set_item_embed(item_id, embed_id, con)
     else:
-        vec = con.execute(
-            "SELECT vector FROM embeddings WHERE raw_item_id = ?", [item_id]
-        ).fetchone()
-        vec = vec[0] if vec else None
+        vec = database.get_embedding_vector(item_id, con)
 
     # Gate 3: cluster assignment
     candidate_clusters = _find_candidate_clusters(vec, con) if vec else []
@@ -106,18 +78,7 @@ def _find_embedding_duplicate(
     vec: list[float],
     con: duckdb.DuckDBPyConnection,
 ) -> int | None:
-    rows = con.execute(
-        """
-        SELECT e.raw_item_id, e.vector
-        FROM embeddings e
-        JOIN raw_items r ON r.id = e.raw_item_id
-        WHERE r.fetched_at >= now() - INTERVAL '7 days'
-          AND r.duplicate_of IS NULL
-          AND e.raw_item_id != ?
-        LIMIT 500
-        """,
-        [item_id],
-    ).fetchall()
+    rows = database.get_recent_embeddings(item_id, con)
 
     if not rows:
         return None
@@ -142,32 +103,8 @@ def _find_embedding_duplicate(
 def _find_candidate_clusters(
     vec: list[float],
     con: duckdb.DuckDBPyConnection,
-    limit: int = 10,
 ) -> list[dict]:
-    """Find nearest clusters by embedding similarity (via raw_items embeddings)."""
-    rows = con.execute(
-        """
-        SELECT DISTINCT c.id, c.headline
-        FROM clusters c
-        JOIN raw_items r ON r.cluster_id = c.id
-        JOIN embeddings e ON e.raw_item_id = r.id
-        WHERE c.latest_seen_at >= now() - INTERVAL '3 days'
-        LIMIT 200
-        """
-    ).fetchall()
-
-    if not rows:
-        return []
-
-    # For MVP: return most recent clusters as candidates (full ANN not needed yet)
-    recent = con.execute(
-        """
-        SELECT id, headline FROM clusters
-        WHERE latest_seen_at >= now() - INTERVAL '3 days'
-        ORDER BY latest_seen_at DESC
-        LIMIT 10
-        """
-    ).fetchall()
+    recent = database.get_recent_clusters(con)
     return [{"id": r[0], "headline": r[1]} for r in recent]
 
 
@@ -182,26 +119,16 @@ def _create_cluster(
 ) -> None:
     result = summarise_single(title or "", body or "", ollama_cfg)
     now = datetime.now(timezone.utc)
-    cluster_row = con.execute(
-        """
-        INSERT INTO clusters
-            (first_seen_at, latest_seen_at, canonical_url, headline, summary,
-             key_points, topics, source_ids, item_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        RETURNING id
-        """,
-        [
-            now, now, url,
-            result.get("headline") or title or "Untitled",
-            result.get("summary") or "",
-            json.dumps(result.get("key_points", [])),
-            result.get("topics", []),
-            [source_id],
-        ],
-    ).fetchone()
-    if cluster_row:
-        cid = cluster_row[0]
-        con.execute("UPDATE raw_items SET cluster_id = ? WHERE id = ?", [cid, item_id])
+    cid = database.insert_cluster(
+        con, now, now, url,
+        result.get("headline") or title or "Untitled",
+        result.get("summary") or "",
+        json.dumps(result.get("key_points", [])),
+        result.get("topics", []),
+        [source_id],
+    )
+    if cid:
+        database.set_item_cluster(item_id, cid, con)
         logger.debug("Created cluster %d for item %d", cid, item_id)
 
 
@@ -215,55 +142,26 @@ def _append_to_cluster(
     con: duckdb.DuckDBPyConnection,
     ollama_cfg,
 ) -> None:
-    con.execute("UPDATE raw_items SET cluster_id = ? WHERE id = ?", [cluster_id, item_id])
+    database.set_item_cluster(item_id, cluster_id, con)
 
-    # Fetch all items in cluster for re-summarisation
-    articles = con.execute(
-        """
-        SELECT title, body_text FROM raw_items
-        WHERE cluster_id = ? AND duplicate_of IS NULL
-        LIMIT 5
-        """,
-        [cluster_id],
-    ).fetchall()
-
+    articles = database.get_items_for_cluster(cluster_id, con)
     article_list = [{"title": a[0], "body": a[1]} for a in articles]
     result = summarise_cluster(article_list, ollama_cfg)
     now = datetime.now(timezone.utc)
 
-    # Update source_ids list
-    existing = con.execute(
-        "SELECT source_ids, item_count FROM clusters WHERE id = ?", [cluster_id]
-    ).fetchone()
-    source_ids = list(existing[0] or [])
+    row = database.get_cluster_source_ids(cluster_id, con)
+    source_ids = list(row[0] or [])
     if source_id not in source_ids:
         source_ids.append(source_id)
-    item_count = (existing[1] or 0) + 1
+    item_count = (row[1] or 0) + 1
 
-    con.execute(
-        """
-        UPDATE clusters
-        SET updated_at     = ?,
-            latest_seen_at = ?,
-            headline       = ?,
-            summary        = ?,
-            key_points     = ?,
-            topics         = ?,
-            source_ids     = ?,
-            item_count     = ?,
-            -- Mark as update if the cluster was previously read
-            is_update      = CASE WHEN read_at IS NOT NULL THEN TRUE ELSE is_update END
-        WHERE id = ?
-        """,
-        [
-            now, now,
-            result.get("headline") or "",
-            result.get("summary") or "",
-            json.dumps(result.get("key_points", [])),
-            result.get("topics", []),
-            source_ids,
-            item_count,
-            cluster_id,
-        ],
+    database.update_cluster(
+        con, cluster_id, now,
+        result.get("headline") or "",
+        result.get("summary") or "",
+        json.dumps(result.get("key_points", [])),
+        result.get("topics", []),
+        source_ids,
+        item_count,
     )
     logger.debug("Appended item %d to cluster %d (now %d items)", item_id, cluster_id, item_count)

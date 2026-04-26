@@ -4,19 +4,19 @@ import asyncio
 import logging
 import socket
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
 from zeroconf import ServiceInfo, Zeroconf
 
 from . import db as database
 from .config import Config, load as load_config
 from .pipeline.dedup import run_pipeline
 from .fetcher.scheduler import run_scheduler, breaking_news_detector
-from .fetcher.hashing import resolve_url
+from .fetcher.hashing import resolve_url, url_hash as _url_hash, content_hash as _content_hash, warm_cache
 from .api import feed as feed_api
 from .api import items as items_api
 from .api.feed import push_event
@@ -40,7 +40,6 @@ def _pipeline_fn(source_id: str, con) -> None:
 
 
 def _register_mdns(port: int) -> Zeroconf:
-    """Register newsapp.local via mDNS using zeroconf."""
     zc = Zeroconf()
     try:
         local_ip = socket.gethostbyname(socket.gethostname())
@@ -61,45 +60,35 @@ def _register_mdns(port: int) -> Zeroconf:
 
 
 def _backfill_resolved_urls() -> None:
-    """Resolve any raw_items/clusters still holding unresolved redirect URLs.
+    """Background thread: resolve old redirect-wrapper URLs stored in DB."""
+    from googlenewsdecoder import gnewsdecoder
 
-    Runs once at startup in a thread. Updates raw_items.url, url_hash,
-    content_hash and clusters.canonical_url in-place.
-    """
-    from .fetcher.hashing import url_hash as _url_hash, content_hash as _content_hash
-    con = database.get()
-    rows = con.execute(
-        """
-        SELECT id, url, title FROM raw_items
-        WHERE (
-               url LIKE '%t.co/%'
-            OR url LIKE '%bit.ly/%'
-            OR url LIKE '%feedburner.com%'
-        )
-        AND url NOT LIKE '%news.google.com%'
-        ORDER BY id DESC
-        LIMIT 2000
-        """
-    ).fetchall()
+    rows = database.run_sync(database.get_unresolved_redirect_items, priority=database.BG)
     if not rows:
         return
+
     logger.info("startup-backfill: resolving %d unresolved URLs", len(rows))
     resolved = 0
     for (rid, url, title) in rows:
-        final, _ = resolve_url(url, con=con, reason="startup-backfill")
+        try:
+            if "news.google.com" in url:
+                result = gnewsdecoder(url, interval=1)
+                final = result["decoded_url"] if result.get("status") else url
+            else:
+                final, _ = resolve_url(url, reason="startup-backfill")
+        except Exception:
+            final = url
         if final and final != url:
             new_uhash = _url_hash(final)
             new_chash = _content_hash(final, title)
-            con.execute(
-                "UPDATE raw_items SET url = ?, url_hash = ?, content_hash = ? WHERE id = ?",
-                [final, new_uhash, new_chash, rid],
-            )
-            # Update cluster canonical_url if it still holds the wrapper URL
-            con.execute(
-                "UPDATE clusters SET canonical_url = ? WHERE canonical_url = ?",
-                [final, url],
-            )
+
+            def _update(con, _rid=rid, _final=final, _url=url, _uh=new_uhash, _ch=new_chash):
+                database.update_item_resolved_url(_rid, _final, _uh, _ch, con)
+                database.update_cluster_canonical_url(_url, _final, con)
+
+            database.run_sync(_update, priority=database.BG)
             resolved += 1
+
     if resolved:
         logger.info("startup-backfill: updated %d items to resolved URLs", resolved)
 
@@ -112,20 +101,18 @@ async def lifespan(app: FastAPI):
 
     database.init(_config.server.db_path)
     database.upsert_sources(_config.sources)
+    database.run_sync(warm_cache, priority=database.BG)
 
     items_api.set_config(_config)
-
-    # Resolve any URLs still stored as redirect wrappers from before the cache was added
-    await asyncio.get_running_loop().run_in_executor(None, _backfill_resolved_urls)
 
     zc = await asyncio.get_running_loop().run_in_executor(
         None, _register_mdns, _config.server.port
     )
 
+    threading.Thread(target=_backfill_resolved_urls, daemon=True, name="backfill").start()
+
     scheduler_task = asyncio.create_task(run_scheduler(_config, _pipeline_fn))
-    breaking_task = asyncio.create_task(
-        breaking_news_detector(_config, push_event)
-    )
+    breaking_task = asyncio.create_task(breaking_news_detector(_config, push_event))
 
     logger.info("newsagg started on %s:%s", _config.server.host, _config.server.port)
     yield
@@ -137,6 +124,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    database.stop()
     await asyncio.get_running_loop().run_in_executor(None, zc.close)
 
 
