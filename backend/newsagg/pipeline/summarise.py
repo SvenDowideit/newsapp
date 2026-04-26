@@ -13,12 +13,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SUMMARY_PROMPT = """\
-You are summarising a news story for display on an eink reader.
+You are summarising a news story. Extract every concrete, specific fact from the article.
+
 Rules:
-- Maximum 4 sentences total.
+- Include specific names (people, organisations, places, products), numbers, dates, and locations.
+- Do NOT use vague phrases like "a bakery", "a company", "a person" when the name is known — use the actual name.
+- Write 2-5 sentences. Use as many as needed to cover the key facts.
 - No filler phrases ("It is worth noting", "In conclusion", etc.).
 - Start with the most important fact.
-- Use plain language.
+- Key points should each be a specific, concrete fact — not a vague category label.
 - Topics should be 2-5 short lowercase tags.
 
 Article title: {title}
@@ -28,8 +31,8 @@ Article text (may be truncated):
 Reply ONLY with valid JSON, no other text:
 {{
   "headline": "<revised headline, max 12 words>",
-  "summary": "<4 sentences max>",
-  "key_points": ["<point>", "<point>", "<point>"],
+  "summary": "<2-5 sentences packed with specific facts>",
+  "key_points": ["<specific fact>", "<specific fact>", "<specific fact>"],
   "topics": ["<tag1>", "<tag2>"]
 }}"""
 
@@ -53,11 +56,15 @@ Reply ONLY with valid JSON, no other text:
 }}"""
 
 _MERGE_PROMPT = """\
-You are merging {n} news articles covering the same story for display on an eink reader.
+You are merging {n} news articles covering the same story.
+
 Rules:
-- Maximum 4 sentences total.
+- Include specific names (people, organisations, places, products), numbers, dates, and locations.
+- Do NOT use vague phrases like "a bakery", "a company", "a person" when the name is known — use the actual name.
+- Write 2-5 sentences. Use as many as needed to cover all key facts across the articles.
 - No filler phrases.
 - Start with the most important fact.
+- Key points should each be a specific, concrete fact.
 - Topics should be 2-5 short lowercase tags.
 
 Articles:
@@ -66,8 +73,8 @@ Articles:
 Reply ONLY with valid JSON, no other text:
 {{
   "headline": "<unified headline, max 12 words>",
-  "summary": "<4 sentences max>",
-  "key_points": ["<point>", "<point>", "<point>"],
+  "summary": "<2-5 sentences packed with specific facts>",
+  "key_points": ["<specific fact>", "<specific fact>", "<specific fact>"],
   "topics": ["<tag1>", "<tag2>"]
 }}"""
 
@@ -140,7 +147,7 @@ def _generate(prompt: str, cfg: "OllamaConfig") -> dict:
 
 
 def summarise_single(title: str, body: str, cfg: "OllamaConfig") -> dict:
-    prompt = _SUMMARY_PROMPT.format(title=title or "", body=(body or "")[:3000])
+    prompt = _SUMMARY_PROMPT.format(title=title or "", body=(body or "")[:6000])
     try:
         return _generate(prompt, cfg)
     except Exception as exc:

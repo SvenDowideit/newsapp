@@ -37,6 +37,7 @@ class ClusterItem(BaseModel):
     key_points: list[str]
     topics: list[str]
     source_ids: list[str]
+    source_labels: list[str] = []
     item_count: int
     is_breaking: bool
     is_update: bool

@@ -542,6 +542,13 @@ function timeAgo(isoStr) {
   return `${Math.floor(secs/86400)}d ago`;
 }
 
+function srcSummary(item) {
+  const labels = item.source_labels || [];
+  if (labels.length > 0 && labels.length <= 4) return esc(labels.join(', '));
+  if (item.item_count > 1) return `${item.item_count} sources`;
+  return esc(labels[0] || 'unknown');
+}
+
 function interestBarHtml(score) {
   const pct = Math.round((score || 0.5) * 100);
   return `<span class="interest-bar-wrap" title="Interest score ${pct}%">` +
@@ -562,7 +569,7 @@ function renderFeed() {
       </div>
       <div class="summary">${esc(item.summary)}</div>
       <div class="item-meta">
-        ${esc((item.topics||[]).join(' · '))} &nbsp;·&nbsp; ${item.item_count} source${item.item_count>1?'s':''}
+        ${esc((item.topics||[]).join(' · '))} &nbsp;·&nbsp; ${srcSummary(item)}
         ${interestBarHtml(item.interest_score)}
       </div>
     </div>`).join('');
@@ -596,7 +603,6 @@ function renderItem() {
   const item = feed[cursor];
   if (!item) return;
 
-  const src = (item.source_ids||[]).join(', ') || 'unknown';
   const topics = (item.topics||[]).join(' · ');
 
   let expandedHtml = '';
@@ -609,10 +615,12 @@ function renderItem() {
 
   const sourceUrls = (expanded && (expanded.source_urls||[]).length)
     ? expanded.source_urls : (item.source_urls||[]);
+  const srcLabels = item.source_labels || [];
   const linksHtml = sourceUrls.length
-    ? `<p class="source-links">${sourceUrls.map(u =>
-        `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(u)}</a>`
-      ).join('<br>')}</p>`
+    ? `<p class="source-links">${sourceUrls.map((u, i) => {
+        const label = srcLabels[i] || u;
+        return `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>`;
+      }).join('<br>')}</p>`
     : '';
 
   const bodyText = item.full_summary || item.summary;
@@ -636,7 +644,7 @@ function renderItem() {
     ${expandedHtml}
     ${linksHtml}
     <div class="item-meta-line">
-      ${esc(topics)} &nbsp;·&nbsp; ${src} &nbsp;·&nbsp; ${item.item_count} source${item.item_count>1?'s':''}
+      ${esc(topics)} &nbsp;·&nbsp; ${srcSummary(item)}
       ${interestBarHtml(item.interest_score)}
     </div>
   `;

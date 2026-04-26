@@ -119,6 +119,7 @@ def _row_to_cluster(r) -> ClusterItem:
         key_points=key_points or [],
         topics=r[9] or [],
         source_ids=r[10] or [],
+        source_labels=r[18] or [],
         item_count=r[11],
         is_breaking=r[12],
         combined_score=r[13] or 0.0,
