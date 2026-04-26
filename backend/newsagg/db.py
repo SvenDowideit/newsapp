@@ -579,7 +579,7 @@ def get_cluster(cluster_id: int, con):
 
 
 def get_cluster_source_urls(cluster_id: int, con, limit: int = 5):
-    return con.execute(
+    rows = con.execute(
         """
         SELECT DISTINCT url FROM raw_items
         WHERE cluster_id = ? AND url IS NOT NULL
@@ -588,6 +588,13 @@ def get_cluster_source_urls(cluster_id: int, con, limit: int = 5):
         """,
         [cluster_id, limit],
     ).fetchall()
+    if rows:
+        return rows
+    # Fall back to canonical_url on the cluster
+    row = con.execute("SELECT canonical_url FROM clusters WHERE id = ?", [cluster_id]).fetchone()
+    if row and row[0]:
+        return [(row[0],)]
+    return []
 
 
 def update_cluster_full_summary(cluster_id: int, full_summary: str,
@@ -609,11 +616,14 @@ def get_feed(con, conditions: list[str], params: list, page: int, page_size: int
                canonical_url, headline, summary, key_points, topics,
                source_ids, item_count, is_breaking, combined_score,
                interest_score, coalesce(is_update, FALSE), full_summary,
-               (SELECT list(url) FROM (
-                   SELECT DISTINCT url FROM raw_items
-                   WHERE cluster_id = c.id AND url IS NOT NULL
-                     AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
-                   LIMIT 5
+               (SELECT coalesce(
+                   (SELECT list(url) FROM (
+                       SELECT DISTINCT url FROM raw_items
+                       WHERE cluster_id = c.id AND url IS NOT NULL
+                         AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
+                       LIMIT 5
+                   )),
+                   CASE WHEN c.canonical_url IS NOT NULL THEN [c.canonical_url] ELSE [] END
                )),
                (SELECT list(s.label) FROM (
                    SELECT DISTINCT s.label FROM sources s

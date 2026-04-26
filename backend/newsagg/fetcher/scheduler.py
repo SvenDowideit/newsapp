@@ -6,6 +6,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
 
 from ..config import Config, SourceConfig
 from .. import db as database
@@ -62,12 +63,25 @@ def _fetch_source(src_cfg: SourceConfig, sched_cfg) -> list[RawItem]:
         return []
 
 
+def _is_root_url(url: str | None) -> bool:
+    """True if url has no meaningful path (e.g. https://www.afr.com or https://www.afr.com/)."""
+    if not url:
+        return True
+    path = urlparse(url).path
+    return not path or path == "/"
+
+
 def _persist_items(items: list[RawItem]) -> int:
     """Resolve URLs, then insert items via DB worker. Returns count of new items."""
     # Phase 1: all HTTP work happens here, outside the DB worker
     resolved: list[tuple[RawItem, str | None]] = []
     for item in items:
+        original_url = item.url
         final_url, html = resolve_url(item.url, reason="ingest")
+        # If resolution produced a root/homepage URL, keep the original — it's more useful
+        if _is_root_url(final_url) and not _is_root_url(original_url):
+            logger.debug("url-resolver: resolution produced root URL %s, reverting to %s", final_url, original_url)
+            final_url = original_url
         item.url = final_url
         resolved.append((item, html))
 
