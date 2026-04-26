@@ -17,6 +17,7 @@ dependencies = [
     "ollama>=0.4",
     "pytz",
     "json-repair",
+    "zeroconf>=0.131",
 ]
 
 [project.optional-dependencies]

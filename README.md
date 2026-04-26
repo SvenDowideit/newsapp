@@ -44,6 +44,8 @@ curl http://localhost:8000/sources
 curl http://localhost:8000/feed
 ```
 
+The backend registers itself as **`newsapp.local`** via mDNS (Zeroconf) on startup, so any device on the LAN can reach it at `http://newsapp.local:8000/`.
+
 ---
 
 ## Make Targets
@@ -195,7 +197,7 @@ learn_rate_interest_down = -0.15
 
 ## Web UI
 
-A browser-based fallback UI is available at **`http://localhost:8000/ui`** once the backend is running. It mirrors the Android gesture model:
+A browser-based fallback UI is available at **`http://localhost:8000/`** (or **`http://newsapp.local:8000/`** on the LAN) once the backend is running. It mirrors the Android gesture model:
 
 - **Tap left / right zones** or **← →** keys: previous/next page within item
 - **Swipe up/down** or **J/K** keys: next/previous item
@@ -216,7 +218,8 @@ Breaking news is pushed live via SSE and shown as a toast.
 make android-deps      # go mod download
 make android-run       # preview on Linux desktop
 
-# Set backend URL (default: http://100.64.0.1:8000 — Tailscale range)
+# Default API URL is http://newsapp.local:8000 (mDNS)
+# Override with:
 export NEWSAGG_API=http://<server-ip>:8000
 make android-apk       # build newsapp.apk (requires Drift CLI + Android SDK locally)
 make android-install   # adb install newsapp.apk

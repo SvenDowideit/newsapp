@@ -701,6 +701,6 @@ connectSSE();
 """
 
 
-@router.get("", response_class=HTMLResponse, include_in_schema=False)
+@router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def webui():
     return HTMLResponse(_HTML)

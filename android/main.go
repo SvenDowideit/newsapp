@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultAPIURL = "http://100.64.0.1:8000" // Tailscale default range
+	defaultAPIURL = "http://newsapp.local:8000" // mDNS — falls back to NEWSAGG_API env var
 	cacheFile     = "newsapp.db"
 	prefetchCount = 50
 )

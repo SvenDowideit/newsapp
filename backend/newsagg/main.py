@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
+import socket
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from zeroconf import ServiceInfo, Zeroconf
 
 from . import db as database
 from .config import Config, load as load_config
@@ -36,6 +38,27 @@ def _pipeline_fn(source_id: str, con) -> None:
     run_pipeline(source_id, con, _config)
 
 
+def _register_mdns(port: int) -> Zeroconf:
+    """Register newsapp.local via mDNS using zeroconf."""
+    zc = Zeroconf()
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        local_ip = "127.0.0.1"
+    addr = socket.inet_aton(local_ip)
+    info = ServiceInfo(
+        "_http._tcp.local.",
+        "newsapp._http._tcp.local.",
+        addresses=[addr],
+        port=port,
+        properties={"path": "/"},
+        server="newsapp.local.",
+    )
+    zc.register_service(info)
+    logger.info("mDNS registered: http://newsapp.local:%d/", port)
+    return zc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _config
@@ -46,6 +69,10 @@ async def lifespan(app: FastAPI):
     database.upsert_sources(_config.sources)
 
     items_api.set_config(_config)
+
+    zc = await asyncio.get_running_loop().run_in_executor(
+        None, _register_mdns, _config.server.port
+    )
 
     scheduler_task = asyncio.create_task(run_scheduler(_config, _pipeline_fn))
     breaking_task = asyncio.create_task(
@@ -62,6 +89,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    await asyncio.get_running_loop().run_in_executor(None, zc.close)
+
 
 app = FastAPI(title="newsagg", version="0.1.0", lifespan=lifespan)
 
@@ -69,7 +98,7 @@ app.include_router(feed_api.router,       prefix="/feed",    tags=["feed"])
 app.include_router(items_api.router,      prefix="/items",   tags=["items"])
 app.include_router(sources_router.router, prefix="/sources", tags=["sources"])
 app.include_router(topics_router.router,  prefix="/topics",  tags=["topics"])
-app.include_router(webui_router.router,   prefix="/ui",      tags=["ui"])
+app.include_router(webui_router.router,   prefix="",         tags=["ui"])
 
 
 @app.get("/health")
@@ -78,7 +107,6 @@ async def health():
 
 
 def run() -> None:
-    assert _config is not None or True  # config loaded in lifespan
     cfg = load_config("config.toml")
     uvicorn.run(
         "newsagg.main:app",
