@@ -5,7 +5,6 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-import duckdb
 import numpy as np
 
 from .. import db as database
@@ -22,13 +21,19 @@ _EMBED_SIM_THRESHOLD = 0.92
 _CLUSTER_CONF_THRESHOLD = 0.70
 
 
-def run_pipeline(source_id: str, con: duckdb.DuckDBPyConnection, cfg: "Config") -> None:
-    """Process all unprocessed raw items for a source through the full pipeline."""
-    items = database.get_unprocessed_items(source_id, con)
+def run_pipeline(source_id: str, cfg: "Config") -> None:
+    """Process all unprocessed raw items for a source.
 
+    Each DB operation is a separate run_sync call so the DB worker is never
+    held while ollama HTTP requests are in flight.
+    """
+    items = database.run_sync(
+        lambda con: database.get_unprocessed_items(source_id, con),
+        priority=database.BG,
+    )
     for (item_id, title, body, url, sid) in items:
         try:
-            _process_item(item_id, title, body, url, sid, con, cfg)
+            _process_item(item_id, title, body, url, sid, cfg)
         except Exception:
             logger.exception("Pipeline error on item %d", item_id)
 
@@ -39,50 +44,73 @@ def _process_item(
     body: str | None,
     url: str | None,
     source_id: str,
-    con: duckdb.DuckDBPyConnection,
     cfg: "Config",
 ) -> None:
     ollama_cfg = cfg.ollama
 
-    existing_embed = database.get_embedding_for_item(item_id, con)
+    # ── Step 1: DB read — do we already have an embedding? ──────────────────
+    existing_embed = database.run_sync(
+        lambda con: database.get_embedding_for_item(item_id, con),
+        priority=database.BG,
+    )
 
+    vec = None
     if existing_embed is None:
+        # ── Step 2: ollama HTTP — compute embedding (outside DB worker) ──────
         text_for_embed = f"{title or ''} {(body or '')[:500]}"
         vec = embed(text_for_embed, ollama_cfg)
 
         if vec is not None:
-            dup_id = _find_embedding_duplicate(item_id, vec, con)
+            # ── Step 3: DB read — check for embedding duplicate ──────────────
+            recent_embeddings = database.run_sync(
+                lambda con: database.get_recent_embeddings(item_id, con),
+                priority=database.BG,
+            )
+            dup_id = _find_embedding_duplicate(vec, recent_embeddings)
             if dup_id is not None:
-                database.mark_item_duplicate(item_id, dup_id, con)
+                database.run_sync(
+                    lambda con: database.mark_item_duplicate(item_id, dup_id, con),
+                    priority=database.BG,
+                )
                 logger.debug("Item %d is embedding-duplicate of %d", item_id, dup_id)
                 return
 
-            embed_id = database.insert_embedding(item_id, ollama_cfg.embed_model, vec, con)
-            if embed_id:
-                database.set_item_embed(item_id, embed_id, con)
+            # ── Step 4: DB write — store embedding ───────────────────────────
+            database.run_sync(
+                lambda con: _store_embedding(item_id, ollama_cfg.embed_model, vec, con),
+                priority=database.BG,
+            )
     else:
-        vec = database.get_embedding_vector(item_id, con)
+        vec = database.run_sync(
+            lambda con: database.get_embedding_vector(item_id, con),
+            priority=database.BG,
+        )
 
-    # Gate 3: cluster assignment
-    candidate_clusters = _find_candidate_clusters(vec, con) if vec else []
-    cluster_id, confidence = assign_cluster(title, body, candidate_clusters, ollama_cfg)
+    # ── Step 5: DB read — get candidate clusters ─────────────────────────────
+    recent_clusters = database.run_sync(
+        database.get_recent_clusters,
+        priority=database.BG,
+    )
+    candidates = [{"id": r[0], "headline": r[1]} for r in recent_clusters]
+
+    # ── Step 6: ollama HTTP — cluster assignment (outside DB worker) ─────────
+    cluster_id, confidence = assign_cluster(title, body, candidates, ollama_cfg)
 
     if cluster_id is not None and confidence >= _CLUSTER_CONF_THRESHOLD:
-        _append_to_cluster(item_id, cluster_id, title, body, url, source_id, con, ollama_cfg)
+        _append_to_cluster(item_id, cluster_id, title, body, url, source_id, ollama_cfg)
     else:
-        _create_cluster(item_id, title, body, url, source_id, con, ollama_cfg)
+        _create_cluster(item_id, title, body, url, source_id, ollama_cfg)
 
 
-def _find_embedding_duplicate(
-    item_id: int,
-    vec: list[float],
-    con: duckdb.DuckDBPyConnection,
-) -> int | None:
-    rows = database.get_recent_embeddings(item_id, con)
+def _store_embedding(item_id: int, model: str, vec, con) -> None:
+    embed_id = database.insert_embedding(item_id, model, vec, con)
+    if embed_id:
+        database.set_item_embed(item_id, embed_id, con)
 
+
+def _find_embedding_duplicate(vec, rows) -> int | None:
     if not rows:
         return None
-
     query_vec = np.array(vec, dtype=np.float32)
     best_id = None
     best_sim = 0.0
@@ -94,18 +122,7 @@ def _find_embedding_duplicate(
         if sim > best_sim:
             best_sim = sim
             best_id = rid
-
-    if best_sim >= _EMBED_SIM_THRESHOLD:
-        return best_id
-    return None
-
-
-def _find_candidate_clusters(
-    vec: list[float],
-    con: duckdb.DuckDBPyConnection,
-) -> list[dict]:
-    recent = database.get_recent_clusters(con)
-    return [{"id": r[0], "headline": r[1]} for r in recent]
+    return best_id if best_sim >= _EMBED_SIM_THRESHOLD else None
 
 
 def _create_cluster(
@@ -114,22 +131,26 @@ def _create_cluster(
     body: str | None,
     url: str | None,
     source_id: str,
-    con: duckdb.DuckDBPyConnection,
     ollama_cfg,
 ) -> None:
+    # ollama call outside DB worker
     result = summarise_single(title or "", body or "", ollama_cfg)
     now = datetime.now(timezone.utc)
-    cid = database.insert_cluster(
-        con, now, now, url,
-        result.get("headline") or title or "Untitled",
-        result.get("summary") or "",
-        json.dumps(result.get("key_points", [])),
-        result.get("topics", []),
-        [source_id],
-    )
-    if cid:
-        database.set_item_cluster(item_id, cid, con)
-        logger.debug("Created cluster %d for item %d", cid, item_id)
+
+    def _write(con):
+        cid = database.insert_cluster(
+            con, now, now, url,
+            result.get("headline") or title or "Untitled",
+            result.get("summary") or "",
+            json.dumps(result.get("key_points", [])),
+            result.get("topics", []),
+            [source_id],
+        )
+        if cid:
+            database.set_item_cluster(item_id, cid, con)
+            logger.debug("Created cluster %d for item %d", cid, item_id)
+
+    database.run_sync(_write, priority=database.BG)
 
 
 def _append_to_cluster(
@@ -139,29 +160,38 @@ def _append_to_cluster(
     body: str | None,
     url: str | None,
     source_id: str,
-    con: duckdb.DuckDBPyConnection,
     ollama_cfg,
 ) -> None:
-    database.set_item_cluster(item_id, cluster_id, con)
+    # ── DB read — mark item, get articles for summarisation ──────────────────
+    def _read(con):
+        database.set_item_cluster(item_id, cluster_id, con)
+        articles = database.get_items_for_cluster(cluster_id, con)
+        row = database.get_cluster_source_ids(cluster_id, con)
+        return articles, row
 
-    articles = database.get_items_for_cluster(cluster_id, con)
+    articles, row = database.run_sync(_read, priority=database.BG)
+
     article_list = [{"title": a[0], "body": a[1]} for a in articles]
+
+    # ollama call outside DB worker
     result = summarise_cluster(article_list, ollama_cfg)
     now = datetime.now(timezone.utc)
 
-    row = database.get_cluster_source_ids(cluster_id, con)
     source_ids = list(row[0] or [])
     if source_id not in source_ids:
         source_ids.append(source_id)
     item_count = (row[1] or 0) + 1
 
-    database.update_cluster(
-        con, cluster_id, now,
-        result.get("headline") or "",
-        result.get("summary") or "",
-        json.dumps(result.get("key_points", [])),
-        result.get("topics", []),
-        source_ids,
-        item_count,
+    database.run_sync(
+        lambda con: database.update_cluster(
+            con, cluster_id, now,
+            result.get("headline") or "",
+            result.get("summary") or "",
+            json.dumps(result.get("key_points", [])),
+            result.get("topics", []),
+            source_ids,
+            item_count,
+        ),
+        priority=database.BG,
     )
     logger.debug("Appended item %d to cluster %d (now %d items)", item_id, cluster_id, item_count)

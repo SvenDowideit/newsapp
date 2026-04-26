@@ -161,7 +161,7 @@ def run_fetch(source_cfg: SourceConfig, sched_cfg, pipeline_fn) -> None:
     if new_count > 0:
         logger.info("Source %s: %d new items", source_cfg.id, new_count)
         try:
-            database.run_sync(lambda con: pipeline_fn(source_cfg.id, con), priority=database.BG)
+            pipeline_fn(source_cfg.id)
         except Exception:
             logger.exception("Pipeline error for source %s", source_cfg.id)
     _update_scheduler(source_cfg.id, new_count, sched_cfg)

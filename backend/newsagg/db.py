@@ -77,16 +77,18 @@ def _worker(db_path: str) -> None:
     _run_migrations(con)
     _reseed_sequences(con)
     while not _shutdown.is_set():
-        # Drain UI queue first; fall back to background
+        # Always check UI queue first — never block while it has work
         item = None
         try:
             item = _ui_queue.get_nowait()
             queue_name = "ui"
         except Empty:
             try:
-                item = _bg_queue.get(timeout=0.05)
+                item = _bg_queue.get_nowait()
                 queue_name = "bg"
             except Empty:
+                # Both queues empty — sleep briefly then re-check
+                _shutdown.wait(timeout=0.01)
                 continue
 
         _seq_num, fut, fn = item

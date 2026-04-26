@@ -34,9 +34,9 @@ logger = logging.getLogger(__name__)
 _config: Config | None = None
 
 
-def _pipeline_fn(source_id: str, con) -> None:
+def _pipeline_fn(source_id: str) -> None:
     assert _config is not None
-    run_pipeline(source_id, con, _config)
+    run_pipeline(source_id, _config)
 
 
 def _register_mdns(port: int) -> Zeroconf:
