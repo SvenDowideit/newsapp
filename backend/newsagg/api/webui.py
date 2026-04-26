@@ -92,6 +92,17 @@ _HTML = r"""<!DOCTYPE html>
     margin-right: 6px;
     vertical-align: middle;
   }
+  .age-badge {
+    display: inline-block;
+    float: right;
+    background: #e8e8e8;
+    color: #555;
+    font-size: 11px;
+    font-weight: normal;
+    padding: 1px 6px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
   /* Interest bar: thin coloured strip */
   .interest-bar-wrap {
     display: inline-flex;
@@ -354,6 +365,7 @@ _HTML = r"""<!DOCTYPE html>
 // ── State ──────────────────────────────────────────────────────────────────
 const API = '';  // same origin
 let feed = [];
+let feedTotal = 0;
 let cursor = 0;       // current item index in feed
 let expanded = null;  // expanded item data
 let itemReadStart = null;
@@ -369,6 +381,7 @@ async function loadFeed() {
     const r = await fetch(`${API}/feed?page_size=50&active=true`);
     const data = await r.json();
     feed = data.items || [];
+    feedTotal = data.total || feed.length;
     renderFeed();
   } catch(e) {
     document.getElementById('loading').textContent = 'Failed to load feed: ' + e.message;
@@ -376,6 +389,15 @@ async function loadFeed() {
 }
 
 // ── Feed view ─────────────────────────────────────────────────────────────
+function timeAgo(isoStr) {
+  if (!isoStr) return '';
+  const secs = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+  if (secs < 60)  return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+  return `${Math.floor(secs/86400)}d ago`;
+}
+
 function interestBarHtml(score) {
   const pct = Math.round((score || 0.5) * 100);
   return `<span class="interest-bar-wrap" title="Interest score ${pct}%">` +
@@ -391,6 +413,7 @@ function renderFeed() {
       <div class="headline">
         ${item.is_breaking ? '<span class="breaking-badge">BREAKING</span>' : ''}
         ${item.is_update   ? '<span class="update-badge">UPDATE</span>'   : ''}
+        <span class="age-badge">${timeAgo(item.latest_seen_at)}</span>
         ${esc(item.headline)}
       </div>
       <div class="summary">${esc(item.summary)}</div>
@@ -405,7 +428,8 @@ function showFeed() {
   document.getElementById('feed-view').style.display = '';
   document.getElementById('item-view').style.display = 'none';
   document.getElementById('interest-btns').style.display = 'none';
-  document.getElementById('topbar-meta').textContent = `${feed.length} items`;
+  document.getElementById('topbar-meta').textContent =
+    feed.length === feedTotal ? `${feed.length} items` : `${feed.length} of ${feedTotal} items`;
   document.getElementById('bottombar-left').textContent = '';
   document.getElementById('bottombar-hint').textContent =
     '← → navigate · Enter open · R refresh · ? help';
@@ -466,6 +490,7 @@ function renderItem() {
     <div class="item-headline">
       ${item.is_breaking ? '<span class="breaking-badge">BREAKING</span>' : ''}
       ${item.is_update   ? '<span class="update-badge">UPDATE</span>'   : ''}
+      <span class="age-badge">${timeAgo(item.latest_seen_at)}</span>
       ${esc(item.headline)}
     </div>
     <p>${esc(bodyText)}</p>
