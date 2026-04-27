@@ -77,6 +77,7 @@ _MANIFEST = """\
 _SW_JS = """\
 const CACHE = 'newsagg-v1';
 const SHELL = ['/', '/interests'];
+const ITEM_RE = /^\/item\/\d+$/;
 
 self.addEventListener('install', e => {
   e.waitUntil(
@@ -98,6 +99,13 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/feed') || url.pathname.startsWith('/items') ||
       url.pathname.startsWith('/sources') || url.pathname.startsWith('/topics')) {
     e.respondWith(fetch(e.request).catch(() => new Response('', {status: 503})));
+    return;
+  }
+  // Item permalink: serve app shell from cache
+  if (ITEM_RE.test(url.pathname)) {
+    e.respondWith(
+      caches.match('/').then(cached => cached || fetch('/'))
+    );
     return;
   }
   // App shell: cache-first, update in background
@@ -525,7 +533,14 @@ if ('serviceWorker' in navigator) {
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
   await loadFeed();
-  showFeed();
+  // If loaded directly on /item/<id>, open that item
+  const m = location.pathname.match(/^\/item\/(\d+)$/);
+  if (m) {
+    const targetId = parseInt(m[1]);
+    const idx = feed.findIndex(f => f.id === targetId);
+    if (idx >= 0) { openItem(idx, true); return; }
+  }
+  showFeed(true);
 }
 
 async function loadFeed() {
@@ -583,7 +598,7 @@ function renderFeed() {
     </div>`).join('');
 }
 
-function showFeed() {
+function showFeed(replace) {
   document.getElementById('feed-view').style.display = '';
   document.getElementById('item-view').style.display = 'none';
   document.getElementById('interest-btns').style.display = 'none';
@@ -593,10 +608,12 @@ function showFeed() {
   document.getElementById('bottombar-hint').textContent =
     '← → navigate · Enter open · R refresh · ? help';
   document.title = 'newsagg';
+  if (replace) history.replaceState({view:'feed'}, '', '/');
+  else history.pushState({view:'feed'}, '', '/');
 }
 
 // ── Item view ─────────────────────────────────────────────────────────────
-function openItem(i) {
+function openItem(i, replace) {
   cursor = i;
   expanded = null;
   itemReadStart = Date.now();
@@ -604,7 +621,11 @@ function openItem(i) {
   document.getElementById('feed-view').style.display = 'none';
   document.getElementById('item-view').style.display = 'flex';
   const item = feed[cursor];
-  if (item) post(`/items/${item.id}/read`, {duration_seconds: 0, fully_read: false});
+  if (item) {
+    post(`/items/${item.id}/read`, {duration_seconds: 0, fully_read: false});
+    if (replace) history.replaceState({view:'item', id:item.id}, '', `/item/${item.id}`);
+    else history.pushState({view:'item', id:item.id}, '', `/item/${item.id}`);
+  }
 }
 
 function renderItem() {
@@ -680,14 +701,20 @@ function zoneRight() { nextItem(); }
 // ── Navigation ────────────────────────────────────────────────────────────
 function nextItem() {
   recordRead();
-  if (cursor + 1 < feed.length) { cursor++; expanded = null; itemReadStart = Date.now(); renderItem(); }
-  else { toast('End of feed'); }
+  if (cursor + 1 < feed.length) {
+    cursor++; expanded = null; itemReadStart = Date.now(); renderItem();
+    const item = feed[cursor];
+    if (item) history.replaceState({view:'item', id:item.id}, '', `/item/${item.id}`);
+  } else { toast('End of feed'); }
 }
 
 function prevItem() {
   recordRead();
-  if (cursor > 0) { cursor--; expanded = null; itemReadStart = Date.now(); renderItem(); }
-  else { showFeed(); }
+  if (cursor > 0) {
+    cursor--; expanded = null; itemReadStart = Date.now(); renderItem();
+    const item = feed[cursor];
+    if (item) history.replaceState({view:'item', id:item.id}, '', `/item/${item.id}`);
+  } else { showFeed(); }
 }
 
 async function expandItem() {
@@ -775,9 +802,9 @@ async function menuAction(action) {
       toast('Saved');
       break;
     case 'send':
-      const url = item.canonical_url || window.location.href;
-      if (navigator.share) { navigator.share({title: item.headline, url}); }
-      else { await navigator.clipboard.writeText(url); toast('Link copied'); }
+      const permalink = `${location.origin}/item/${item.id}`;
+      if (navigator.share) { navigator.share({title: item.headline, url: permalink}); }
+      else { await navigator.clipboard.writeText(permalink); toast('Link copied'); }
       break;
     case 'interest_up':
       await post(`/items/${item.id}/interest`, {direction:'up'});
@@ -910,6 +937,27 @@ function connectSSE() {
   };
   es.onerror = () => setTimeout(connectSSE, 5000);
 }
+
+// ── Popstate (browser back/forward) ──────────────────────────────────────
+window.addEventListener('popstate', e => {
+  const state = e.state;
+  if (!state || state.view === 'feed') {
+    document.getElementById('feed-view').style.display = '';
+    document.getElementById('item-view').style.display = 'none';
+    document.getElementById('interest-btns').style.display = 'none';
+    document.title = 'newsagg';
+    return;
+  }
+  if (state.view === 'item') {
+    const idx = feed.findIndex(f => f.id === state.id);
+    if (idx >= 0) {
+      cursor = idx; expanded = null; itemReadStart = Date.now();
+      renderItem();
+      document.getElementById('feed-view').style.display = 'none';
+      document.getElementById('item-view').style.display = 'flex';
+    }
+  }
+});
 
 boot();
 connectSSE();
@@ -1073,6 +1121,11 @@ load().catch(e => { document.getElementById('status').textContent = 'Load failed
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def webui():
+    return HTMLResponse(_HTML)
+
+
+@router.get("/item/{item_id}", response_class=HTMLResponse, include_in_schema=False)
+async def webui_item(item_id: int):
     return HTMLResponse(_HTML)
 
 
