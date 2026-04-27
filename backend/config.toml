@@ -1,7 +1,7 @@
 [server]
 host = "0.0.0.0"
 port = 8000
-db_path = "news.duckdb"
+db_path = "test-news.duckdb"
 
 [ollama]
 #base_url = "http://localhost:11434"
@@ -19,8 +19,8 @@ breaking_news_threshold = 5
 breaking_news_window_minutes = 10
 
 [interest]
-decay_rate = 0.01
-learn_rate_read = 0.15
+decay_rate = 0
+learn_rate_read = 0
 learn_rate_discard = -0.05
 learn_rate_follow = 0.25
 learn_rate_save = 0.30

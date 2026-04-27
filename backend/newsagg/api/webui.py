@@ -532,7 +532,7 @@ if ('serviceWorker' in navigator) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
-  await loadFeed();
+  await Promise.all([loadFeed(), loadWeights()]);
   // If loaded directly on /item/<id>, open that item
   const m = location.pathname.match(/^\/item\/(\d+)$/);
   if (m) {
@@ -632,7 +632,15 @@ function renderItem() {
   const item = feed[cursor];
   if (!item) return;
 
-  const topics = (item.topics||[]).join(' · ');
+  const topicsHtml = (item.topics||[]).map(t => {
+    const w = _topicWeights[t];
+    const score = w !== undefined ? ` <span style="color:var(--meta);font-size:11px">(${Math.round(w*100)}%)</span>` : '';
+    return esc(t) + score;
+  }).join(' · ');
+
+  const srcLabels = item.source_labels || [];
+  const srcIds = item.source_ids || [];
+  const srcPubs = item.source_published_ats || [];
 
   let expandedHtml = '';
   if (expanded) {
@@ -644,16 +652,15 @@ function renderItem() {
 
   const sourceUrls = (expanded && (expanded.source_urls||[]).length)
     ? expanded.source_urls : (item.source_urls||[]);
-  const srcLabels = item.source_labels || [];
-  const srcIds = item.source_ids || [];
-  const srcPubs = item.source_published_ats || [];
   const linksHtml = sourceUrls.length
     ? `<p class="source-links">${sourceUrls.map((u, i) => {
         const label = srcLabels[i] || u;
         const sid = srcIds[i] || '';
+        const srcW = sid && _sourceWeights[sid] !== undefined
+          ? ` <span style="color:var(--meta);font-size:11px">(${Math.round(_sourceWeights[sid]*100)}%)</span>` : '';
         const pub = srcPubs[i] ? ` <span style="color:var(--meta);font-size:11px">${timeAgo(srcPubs[i])}</span>` : '';
         return `<span class="src-row">` +
-          `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>${pub}` +
+          `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>${srcW}${pub}` +
           (sid ? ` <button class="src-ibtn" title="Less interest in this source" onclick="adjustSourceInterest('${esc(sid)}',-1)">−</button>` +
                  `<button class="src-ibtn" title="More interest in this source" onclick="adjustSourceInterest('${esc(sid)}',1)">+</button>` : '') +
           `</span>`;
@@ -681,7 +688,7 @@ function renderItem() {
     ${expandedHtml}
     ${linksHtml}
     <div class="item-meta-line">
-      ${esc(topics)} &nbsp;·&nbsp; ${srcSummary(item)}
+      ${topicsHtml} &nbsp;·&nbsp; ${srcSummary(item)}
       ${interestBarHtml(item.interest_score)}
     </div>
   `;
@@ -766,6 +773,18 @@ function closeMenuIfOutside(e) {
 // tracks clusters that got a link-click interest boost this session
 const _linkBoosted = new Set();
 const _sourceWeights = {};  // cache: source_id -> current weight
+const _topicWeights = {};   // cache: topic -> current weight
+
+async function loadWeights() {
+  try {
+    const [tr, sr] = await Promise.all([
+      fetch('/topics').then(r => r.json()),
+      fetch('/topics/sources').then(r => r.json()),
+    ]);
+    tr.forEach(t => { _topicWeights[t.topic] = t.weight; });
+    sr.forEach(s => { _sourceWeights[s.id] = s.weight; });
+  } catch(e) {}
+}
 
 function onLinkClick(clusterId) {
   if (_linkBoosted.has(clusterId)) return;
@@ -774,13 +793,6 @@ function onLinkClick(clusterId) {
 }
 
 async function adjustSourceInterest(sourceId, direction) {
-  if (!_sourceWeights[sourceId]) {
-    // fetch current weight on first use
-    try {
-      const rows = await fetch('/topics/sources').then(r => r.json());
-      rows.forEach(s => { _sourceWeights[s.id] = s.weight; });
-    } catch(e) { toast('Failed to load source weights'); return; }
-  }
   const current = _sourceWeights[sourceId] ?? 0.5;
   const next = Math.max(0, Math.min(1, current + direction * 0.1));
   _sourceWeights[sourceId] = next;
@@ -791,6 +803,7 @@ async function adjustSourceInterest(sourceId, direction) {
       body: JSON.stringify({weight: next}),
     });
     toast(direction > 0 ? 'Source boosted' : 'Source reduced');
+    renderItem();
   } catch(e) { toast('Failed to update source interest'); }
 }
 
