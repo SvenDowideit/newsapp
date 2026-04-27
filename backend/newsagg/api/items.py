@@ -8,7 +8,8 @@ from fastapi import APIRouter, HTTPException
 
 from .. import db as database
 from .. import interest as interest_model
-from ..models import ReadEventBody, InterestAdjustBody, ExpandedItem
+from ..models import ReadEventBody, InterestAdjustBody, ExpandedItem, ClusterItem
+from ..api.feed import _row_to_cluster
 from ..fetcher.hashing import resolve_url
 from ..fetcher.rss_discovery import autodiscover_rss
 from ..pipeline.summarise import summarise_single, summarise_excerpt
@@ -45,6 +46,17 @@ async def _record_event(cluster_id: int, event_type: str, **kwargs) -> None:
         if str(exc) == "not_found":
             raise HTTPException(status_code=404, detail="Cluster not found")
         raise
+
+
+@router.get("/{cluster_id}", response_model=ClusterItem)
+async def get_item(cluster_id: int):
+    row = await database.arun(
+        lambda con: database.get_cluster_as_feed_row(cluster_id, con),
+        priority=database.UI,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    return _row_to_cluster(row)
 
 
 @router.post("/{cluster_id}/read", status_code=204)

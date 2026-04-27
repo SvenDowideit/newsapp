@@ -578,6 +578,43 @@ def get_cluster(cluster_id: int, con):
     ).fetchone()
 
 
+def get_cluster_as_feed_row(cluster_id: int, con):
+    """Return a single cluster in the same column layout as get_feed rows."""
+    return con.execute(
+        """
+        SELECT c.id, c.created_at, c.updated_at, c.first_seen_at, c.latest_seen_at,
+               c.canonical_url, c.headline, c.summary, c.key_points, c.topics,
+               c.source_ids, c.item_count, c.is_breaking,
+               coalesce(c.combined_score, 0.0), coalesce(c.interest_score, 0.5),
+               coalesce(c.is_update, FALSE), c.full_summary,
+               (SELECT coalesce(
+                   (SELECT list(url) FROM (
+                       SELECT DISTINCT url FROM raw_items
+                       WHERE cluster_id = c.id AND url IS NOT NULL
+                         AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
+                       LIMIT 5
+                   )),
+                   CASE WHEN c.canonical_url IS NOT NULL THEN [c.canonical_url] ELSE [] END
+               )),
+               (SELECT list(s.label) FROM (
+                   SELECT DISTINCT s.label FROM sources s
+                   WHERE list_contains(c.source_ids, s.id)
+                   LIMIT 5
+               ) s),
+               (SELECT list(pub) FROM (
+                   SELECT DISTINCT ON (url) published_at AS pub FROM raw_items
+                   WHERE cluster_id = c.id AND url IS NOT NULL
+                     AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
+                   ORDER BY url, published_at DESC NULLS LAST
+                   LIMIT 5
+               ))
+        FROM clusters c
+        WHERE c.id = ?
+        """,
+        [cluster_id],
+    ).fetchone()
+
+
 def get_cluster_source_urls(cluster_id: int, con, limit: int = 5):
     rows = con.execute(
         """

@@ -537,7 +537,14 @@ async function boot() {
   const m = location.pathname.match(/^\/item\/(\d+)$/);
   if (m) {
     const targetId = parseInt(m[1]);
-    const idx = feed.findIndex(f => f.id === targetId);
+    let idx = feed.findIndex(f => f.id === targetId);
+    if (idx < 0) {
+      // Item not in current feed (e.g. already read) — fetch it directly
+      try {
+        const item = await fetch(`/items/${targetId}`).then(r => r.ok ? r.json() : null);
+        if (item) { feed.unshift(item); idx = 0; }
+      } catch(_) {}
+    }
     if (idx >= 0) { openItem(idx, true); return; }
   }
   showFeed(true);
