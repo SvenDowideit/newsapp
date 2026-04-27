@@ -64,18 +64,20 @@ Reply ONLY with valid JSON, no other text:
 }}"""
 
 _MERGE_PROMPT = """\
-You are merging {n} news articles covering the same story.
+You are merging {n} news articles that all report on the same specific event or development.
 
 Rules:
+- Focus on what the articles AGREE on and CORROBORATE — multiple sources confirming a fact makes it more credible.
+- Note where sources add new specific detail (a name, number, or quote not in the others).
+- Do NOT broaden the scope beyond the specific event all articles share.
+- Do NOT introduce topics or facts that only one article mentions unless they are highly specific and verifiable.
 - Include specific names (people, organisations, places, products), numbers, dates, and locations.
-- Do NOT use vague phrases like "a bakery", "a company", "a person" when the name is known — use the actual name.
-- Write 2-5 sentences. Use as many as needed to cover all key facts across the articles.
+- Write 2-5 sentences. Stay tightly focused on the single shared event.
 - No filler phrases.
-- Start with the most important fact.
-- Key points should each be a specific, concrete fact.
-- Topics should be 2-5 short lowercase tags.
-- Locations: if the story is about events in a specific place, list the geographic levels that apply.
-  Use real place names only. Omit levels that don't apply.
+- Start with the most important corroborated fact.
+- Key points should each be a specific, concrete fact confirmed by at least one source.
+- Topics should be 2-5 short lowercase tags reflecting the specific event, not the general industry.
+- Locations: use real place names only. Omit levels that don't apply.
 
 Articles:
 {articles}
@@ -83,8 +85,8 @@ Articles:
 Reply ONLY with valid JSON, no other text:
 {{
   "headline": "<unified headline, max 12 words>",
-  "summary": "<2-5 sentences packed with specific facts>",
-  "key_points": ["<specific fact>", "<specific fact>", "<specific fact>"],
+  "summary": "<2-5 sentences tightly focused on the specific shared event>",
+  "key_points": ["<specific corroborated fact>", "<specific corroborated fact>", "<specific corroborated fact>"],
   "topics": ["<tag1>", "<tag2>"],
   "locations": {{
     "city": "<city name or null>",

@@ -21,10 +21,10 @@ New item:
 Candidate clusters (most recent first):
 {candidates}
 
-Assign the item to a cluster if it covers the same story or closely related developments
-in the same ongoing situation (e.g. same market event, same incident, same policy debate).
-Do NOT require identical events — related coverage of the same unfolding story should be merged.
-If no candidate is a good match, return null.
+Only assign the item to a cluster if it reports on the exact same specific event, incident,
+announcement, or development. Do NOT merge items merely because they share a topic area or industry.
+"AI regulation" and "AI chip export ban" are different stories. "Supply chain attack" and "job scam"
+are different stories. When in doubt, return null.
 
 Reply ONLY with valid JSON, no other text:
 {{"cluster_id": <integer or null>, "confidence": <0.0-1.0>}}"""
