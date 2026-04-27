@@ -629,7 +629,14 @@ def get_feed(con, conditions: list[str], params: list, page: int, page_size: int
                    SELECT DISTINCT s.label FROM sources s
                    WHERE list_contains(c.source_ids, s.id)
                    LIMIT 5
-               ) s)
+               ) s),
+               (SELECT list(pub) FROM (
+                   SELECT DISTINCT ON (url) published_at AS pub FROM raw_items
+                   WHERE cluster_id = c.id AND url IS NOT NULL
+                     AND length(regexp_replace(url, '^https?://[^/]+', '')) > 1
+                   ORDER BY url, published_at DESC NULLS LAST
+                   LIMIT 5
+               ))
         FROM clusters c
         WHERE {where}
         ORDER BY combined_score DESC

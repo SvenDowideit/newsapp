@@ -646,13 +646,14 @@ function renderItem() {
     ? expanded.source_urls : (item.source_urls||[]);
   const srcLabels = item.source_labels || [];
   const srcIds = item.source_ids || [];
+  const srcPubs = item.source_published_ats || [];
   const linksHtml = sourceUrls.length
     ? `<p class="source-links">${sourceUrls.map((u, i) => {
         const label = srcLabels[i] || u;
         const sid = srcIds[i] || '';
-        const sidAttr = sid ? ` data-sid="${esc(sid)}"` : '';
+        const pub = srcPubs[i] ? ` <span style="color:var(--meta);font-size:11px">${timeAgo(srcPubs[i])}</span>` : '';
         return `<span class="src-row">` +
-          `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>` +
+          `<a href="${esc(u)}" target="_blank" rel="noopener" onclick="onLinkClick(${item.id})">${esc(label)}</a>${pub}` +
           (sid ? ` <button class="src-ibtn" title="Less interest in this source" onclick="adjustSourceInterest('${esc(sid)}',-1)">−</button>` +
                  `<button class="src-ibtn" title="More interest in this source" onclick="adjustSourceInterest('${esc(sid)}',1)">+</button>` : '') +
           `</span>`;

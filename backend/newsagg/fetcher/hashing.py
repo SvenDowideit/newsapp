@@ -21,6 +21,7 @@ _REDIRECT_DOMAINS = {
     "feeds.feedburner.com",
     "rss.cnn.com",
     "feeds.bbci.co.uk",
+    "news.google.com",
 }
 
 _resolve_cache: dict[str, tuple[str, str | None]] = {}

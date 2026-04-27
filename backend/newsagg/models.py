@@ -45,6 +45,7 @@ class ClusterItem(BaseModel):
     interest_score: float
     full_summary: str | None = None
     source_urls: list[str] = []
+    source_published_ats: list[datetime | None] = []
 
 
 class FeedResponse(BaseModel):

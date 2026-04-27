@@ -127,4 +127,5 @@ def _row_to_cluster(r) -> ClusterItem:
         is_update=bool(r[15]),
         full_summary=r[16] or None,
         source_urls=r[17] or [],
+        source_published_ats=r[19] or [],
     )
