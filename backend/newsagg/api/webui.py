@@ -955,6 +955,14 @@ _INTERESTS_HTML = """<!DOCTYPE html>
 <h1>Interests</h1>
 <h2>Topics</h2>
 <div id="topics-list"><p style="color:var(--meta)">Loading…</p></div>
+<h2>Cities</h2>
+<div id="geo-city-list"><p style="color:var(--meta)">Loading…</p></div>
+<h2>States / Provinces</h2>
+<div id="geo-state-list"><p style="color:var(--meta)">Loading…</p></div>
+<h2>Countries</h2>
+<div id="geo-country-list"><p style="color:var(--meta)">Loading…</p></div>
+<h2>World Regions</h2>
+<div id="geo-region-list"><p style="color:var(--meta)">Loading…</p></div>
 <h2>Sources</h2>
 <div id="sources-list"><p style="color:var(--meta)">Loading…</p></div>
 <div id="status"></div>
@@ -1002,18 +1010,41 @@ async function load() {
     fetch('/topics/sources').then(r => r.json()),
   ]);
 
-  const tEl = document.getElementById('topics-list');
-  tEl.innerHTML = '';
-  let tw = {};
+  // Split into regular topics and geo tags (geo:level:place)
+  const geoRe = /^geo:(city|state|country|region):(.+)$/;
+  const regular = [], geo = {city:[], state:[], country:[], region:[]};
   tr.forEach(t => {
-    tw[t.topic] = t.weight;
-    tEl.appendChild(row(
-      `${t.topic} (${t.item_count})`,
-      t.weight,
-      async () => { const w = clamp(tw[t.topic] + STEP); await put(`/topics/${encodeURIComponent(t.topic)}/interest`, w); tw[t.topic] = w; status('Saved'); return w; },
-      async () => { const w = clamp(tw[t.topic] - STEP); await put(`/topics/${encodeURIComponent(t.topic)}/interest`, w); tw[t.topic] = w; status('Saved'); return w; },
-    ));
+    const m = t.topic.match(geoRe);
+    if (m) geo[m[1]].push({...t, place: m[2]});
+    else regular.push(t);
   });
+
+  let tw = {};
+  tr.forEach(t => { tw[t.topic] = t.weight; });
+
+  function addTopicRows(el, items, labelFn) {
+    el.innerHTML = '';
+    if (!items.length) { el.innerHTML = '<p style="color:var(--meta);font-size:13px">None seen yet.</p>'; return; }
+    items.forEach(t => {
+      el.appendChild(row(
+        labelFn(t),
+        t.weight,
+        async () => { const w = clamp(tw[t.topic] + STEP); await put(`/topics/${encodeURIComponent(t.topic)}/interest`, w); tw[t.topic] = w; status('Saved'); return w; },
+        async () => { const w = clamp(tw[t.topic] - STEP); await put(`/topics/${encodeURIComponent(t.topic)}/interest`, w); tw[t.topic] = w; status('Saved'); return w; },
+      ));
+    });
+  }
+
+  addTopicRows(document.getElementById('topics-list'), regular,
+    t => `${t.topic} (${t.item_count})`);
+  addTopicRows(document.getElementById('geo-city-list'),   geo.city,
+    t => `${t.place} (${t.item_count})`);
+  addTopicRows(document.getElementById('geo-state-list'),  geo.state,
+    t => `${t.place} (${t.item_count})`);
+  addTopicRows(document.getElementById('geo-country-list'),geo.country,
+    t => `${t.place} (${t.item_count})`);
+  addTopicRows(document.getElementById('geo-region-list'), geo.region,
+    t => `${t.place} (${t.item_count})`);
 
   const sEl = document.getElementById('sources-list');
   sEl.innerHTML = '';

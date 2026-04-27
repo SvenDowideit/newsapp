@@ -91,7 +91,7 @@ def _process_item(
         database.get_recent_clusters,
         priority=database.BG,
     )
-    candidates = [{"id": r[0], "headline": r[1]} for r in recent_clusters]
+    candidates = [{"id": r[0], "headline": r[1], "summary": r[2]} for r in recent_clusters]
 
     # ── Step 6: ollama HTTP — cluster assignment (outside DB worker) ─────────
     cluster_id, confidence = assign_cluster(title, body, candidates, ollama_cfg)

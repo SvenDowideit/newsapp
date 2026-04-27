@@ -498,7 +498,7 @@ def get_recent_embeddings(item_id: int, con, days: int = 14, limit: int = 1000):
 def get_recent_clusters(con, days: int = 14, limit: int = 50):
     return con.execute(
         """
-        SELECT id, headline FROM clusters
+        SELECT id, headline, summary FROM clusters
         WHERE latest_seen_at >= now() - INTERVAL '14 days'
         ORDER BY latest_seen_at DESC
         LIMIT ?
@@ -751,6 +751,7 @@ def update_interest_weights(cluster_id: int, event_type: str, delta: float,
     if not topics_row or not topics_row[0]:
         return
     for topic in topics_row[0]:
+        topic = topic.lower()
         con.execute(
             """
             INSERT INTO interest_weights (topic, weight, event_count, last_updated)
@@ -768,18 +769,18 @@ def list_topics(con):
     return con.execute(
         """
         SELECT
-            t.topic,
-            coalesce(w.weight, 0.5) AS weight,
-            count(DISTINCT c.id)    AS item_count
+            lower(t.topic)                   AS topic,
+            coalesce(w.weight, 0.5)          AS weight,
+            count(DISTINCT c.id)             AS item_count
         FROM (
-            SELECT DISTINCT t.topic
+            SELECT DISTINCT lower(t.topic) AS topic
             FROM clusters, UNNEST(topics) AS t(topic)
         ) t
         LEFT JOIN interest_weights w ON w.topic = t.topic
-        LEFT JOIN clusters c ON list_contains(c.topics, t.topic)
-        GROUP BY t.topic, w.weight
+        LEFT JOIN clusters c ON list_contains(list_transform(c.topics, x -> lower(x)), t.topic)
+        GROUP BY lower(t.topic), w.weight
         ORDER BY item_count DESC, weight DESC
-        LIMIT 50
+        LIMIT 200
         """
     ).fetchall()
 
@@ -790,6 +791,7 @@ def list_topics(con):
 
 def set_topic_interest(topic: str, weight: float, con) -> None:
     weight = max(0.0, min(1.0, weight))
+    topic = topic.lower()
     con.execute(
         """
         INSERT INTO interest_weights (topic, weight, event_count, last_updated)

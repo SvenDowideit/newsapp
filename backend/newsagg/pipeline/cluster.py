@@ -14,14 +14,17 @@ logger = logging.getLogger(__name__)
 _CLUSTER_PROMPT = """\
 You are deciding whether a news item belongs to an existing story cluster.
 
-New item title: {title}
-New item summary (first 200 chars): {body}
+New item:
+  Title: {title}
+  Content: {body}
 
-Candidate clusters:
+Candidate clusters (most recent first):
 {candidates}
 
-If the item clearly covers the same event as a candidate, return that cluster_id.
-Otherwise return null.
+Assign the item to a cluster if it covers the same story or closely related developments
+in the same ongoing situation (e.g. same market event, same incident, same policy debate).
+Do NOT require identical events — related coverage of the same unfolding story should be merged.
+If no candidate is a good match, return null.
 
 Reply ONLY with valid JSON, no other text:
 {{"cluster_id": <integer or null>, "confidence": <0.0-1.0>}}"""
@@ -53,11 +56,12 @@ def assign_cluster(
         return None, 0.0
 
     cand_text = "\n".join(
-        f"  id={c['id']}: {c['headline']}" for c in candidates[:10]
+        f"  id={c['id']}: {c['headline']} — {(c.get('summary') or '')[:150]}"
+        for c in candidates[:50]
     )
     prompt = _CLUSTER_PROMPT.format(
         title=title or "",
-        body=(body or "")[:200],
+        body=(body or "")[:500],
         candidates=cand_text,
     )
     try:
