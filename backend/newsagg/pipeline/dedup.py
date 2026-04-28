@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _EMBED_SIM_THRESHOLD = 0.92
-_CLUSTER_CONF_THRESHOLD = 0.70
+_CLUSTER_CONF_THRESHOLD = 0.82
 
 
 def run_pipeline(source_id: str, cfg: "Config") -> None:
@@ -94,7 +94,15 @@ def _process_item(
     candidates = [{"id": r[0], "headline": r[1], "summary": r[2]} for r in recent_clusters]
 
     # ── Step 6: ollama HTTP — cluster assignment (outside DB worker) ─────────
-    cluster_id, confidence = assign_cluster(title, body, candidates, ollama_cfg)
+    # Only attempt cluster assignment if we have enough text to make a reliable decision.
+    # Thin body text leads to hallucinated matches against unrelated candidates.
+    body_len = len(body or "")
+    if body_len >= 200 and candidates:
+        cluster_id, confidence = assign_cluster(title, body, candidates, ollama_cfg)
+    else:
+        cluster_id, confidence = None, 0.0
+        if body_len < 200:
+            logger.debug("Item %d has thin body (%d chars), skipping cluster assignment", item_id, body_len)
 
     if cluster_id is not None and confidence >= _CLUSTER_CONF_THRESHOLD:
         _append_to_cluster(item_id, cluster_id, title, body, url, source_id, cfg)

@@ -71,8 +71,34 @@ def _is_root_url(url: str | None) -> bool:
     return not path or path == "/"
 
 
+def _extract_text(html: str) -> str:
+    """Extract readable text from HTML, stripping boilerplate tags."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        return soup.get_text(separator="\n", strip=True)
+    except Exception:
+        return ""
+
+
+def _fetch_article_text(url: str) -> tuple[str | None, str | None]:
+    """Fetch article page and return (plain_text, html). Returns (None, None) on failure."""
+    try:
+        import httpx
+        headers = {"User-Agent": "newsagg/0.1 (personal aggregator)"}
+        resp = httpx.get(url, headers=headers, timeout=20, follow_redirects=True)
+        resp.raise_for_status()
+        html = resp.text
+        return _extract_text(html), html
+    except Exception as exc:
+        logger.debug("article fetch failed for %s: %s", url, exc)
+        return None, None
+
+
 def _persist_items(items: list[RawItem]) -> int:
-    """Resolve URLs, then insert items via DB worker. Returns count of new items."""
+    """Resolve URLs, fetch full article text, then insert items via DB worker."""
     # Phase 1: all HTTP work happens here, outside the DB worker
     resolved: list[tuple[RawItem, str | None]] = []
     for item in items:
@@ -83,6 +109,17 @@ def _persist_items(items: list[RawItem]) -> int:
             logger.debug("url-resolver: resolution produced root URL %s, reverting to %s", final_url, original_url)
             final_url = original_url
         item.url = final_url
+
+        # Fetch full article text if we don't already have it from redirect resolution
+        if not html and item.url and not _is_root_url(item.url):
+            article_text, html = _fetch_article_text(item.url)
+            if article_text and (not item.body_text or len(item.body_text) < len(article_text)):
+                item.body_text = article_text
+        elif html:
+            article_text = _extract_text(html)
+            if article_text and (not item.body_text or len(item.body_text) < len(article_text)):
+                item.body_text = article_text
+
         resolved.append((item, html))
 
     # Phase 2: single DB transaction via worker

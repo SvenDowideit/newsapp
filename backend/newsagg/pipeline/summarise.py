@@ -165,7 +165,7 @@ def _generate(prompt: str, cfg: "OllamaConfig") -> dict:
 
 
 def summarise_single(title: str, body: str, cfg: "OllamaConfig") -> dict:
-    prompt = _SUMMARY_PROMPT.format(title=title or "", body=(body or "")[:6000])
+    prompt = _SUMMARY_PROMPT.format(title=title or "", body=body or "")
     try:
         return _generate(prompt, cfg)
     except Exception as exc:
@@ -195,7 +195,7 @@ def summarise_excerpt(summary: str, key_points: list[str], body: str, cfg: "Olla
 
 def summarise_cluster(articles: list[dict], cfg: "OllamaConfig") -> dict:
     articles_text = json.dumps(
-        [{"title": a.get("title", ""), "body": (a.get("body") or "")[:800]} for a in articles],
+        [{"title": a.get("title", ""), "body": a.get("body") or ""} for a in articles],
         indent=2,
     )
     prompt = _MERGE_PROMPT.format(n=len(articles), articles=articles_text)
