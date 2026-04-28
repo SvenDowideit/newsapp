@@ -76,7 +76,7 @@ _MANIFEST = """\
 
 _SW_JS = """\
 const CACHE = 'newsagg-v1';
-const SHELL = ['/', '/interests'];
+const SHELL = ['/', '/interests', '/stats'];
 const ITEM_RE = /^\/item\/\d+$/;
 
 self.addEventListener('install', e => {
@@ -1022,6 +1022,7 @@ _INTERESTS_HTML = """<!DOCTYPE html>
 <body>
 <a class="back" href="/">← Back to feed</a>
 <h1>Interests</h1>
+<p style="font-size:13px;color:var(--meta);margin-bottom:12px"><a href="/stats" style="color:var(--accent)">View stats →</a></p>
 <h2>Topics</h2>
 <div id="topics-list"><p style="color:var(--meta)">Loading…</p></div>
 <h2>Cities</h2>
@@ -1136,6 +1137,285 @@ load().catch(e => { document.getElementById('status').textContent = 'Load failed
 """
 
 
+_STATS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stats – newsagg</title>
+<style>
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --bg: #fff; --fg: #111; --meta: #666; --border: #ddd; --accent: #0057b8; --green: #2a9d2a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg);
+         padding: calc(var(--sat) + 12px) 16px calc(var(--sab) + 24px); max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  h2 { font-size: 14px; color: var(--meta); margin: 24px 0 10px; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  a.back { font-size: 13px; color: var(--accent); text-decoration: none; display: inline-block; margin-bottom: 14px; }
+  .nav { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .nav a { font-size: 13px; color: var(--accent); text-decoration: none; }
+
+  /* Summary cards */
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .card { border: 1px solid var(--border); border-radius: 6px; padding: 12px 18px; min-width: 120px; }
+  .card .val { font-size: 28px; font-weight: bold; }
+  .card .lbl { font-size: 12px; color: var(--meta); }
+
+  /* Charts */
+  .chart-wrap { position: relative; height: 160px; margin-bottom: 4px; overflow: hidden; }
+  canvas { display: block; }
+
+  /* Sources table */
+  .src-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .src-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border);
+                  font-size: 12px; color: var(--meta); white-space: nowrap; }
+  .src-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .src-table tr:hover td { background: #f8f8f8; }
+  .spark { display: inline-block; vertical-align: middle; }
+  .interest-val { font-size: 12px; color: var(--meta); width: 30px; text-align: right; display: inline-block; }
+  .ibtn { border: 1px solid var(--border); background: none; cursor: pointer; border-radius: 3px;
+          width: 22px; height: 22px; font-size: 14px; line-height: 1; color: var(--fg); }
+  .ibtn:hover { background: #eee; }
+  .err { color: #c00; font-size: 11px; }
+  #status { font-size: 12px; color: var(--meta); margin-top: 12px; min-height: 18px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--meta); margin-bottom: 6px; }
+  .legend span::before { content: ''; display: inline-block; width: 10px; height: 10px;
+                          border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .leg-read::before { background: #0057b8; }
+  .leg-click::before { background: #2a9d2a; }
+  .leg-discard::before { background: #c44; }
+  .leg-save::before { background: #c80; }
+</style>
+</head>
+<body>
+<a class="back" href="/">← Feed</a>
+<div class="nav">
+  <a href="/interests">Interests</a>
+  <a href="/stats">Stats</a>
+</div>
+<h1>Stats</h1>
+
+<div class="cards" id="cards"></div>
+
+<h2>Activity — last 7 days (hourly)</h2>
+<div class="legend">
+  <span class="leg-read">Read</span>
+  <span class="leg-click">Link click</span>
+  <span class="leg-discard">Discard</span>
+  <span class="leg-save">Save</span>
+</div>
+<div class="chart-wrap"><canvas id="chart7"></canvas></div>
+
+<h2>Activity — last 30 days (daily)</h2>
+<div class="legend">
+  <span class="leg-read">Read</span>
+  <span class="leg-click">Link click</span>
+  <span class="leg-discard">Discard</span>
+  <span class="leg-save">Save</span>
+</div>
+<div class="chart-wrap"><canvas id="chart30"></canvas></div>
+
+<h2>Sources</h2>
+<table class="src-table" id="src-table">
+  <thead><tr>
+    <th>Source</th>
+    <th>Items</th>
+    <th>Reads</th>
+    <th>Link clicks</th>
+    <th>Last 14d</th>
+    <th>Interest</th>
+    <th></th>
+  </tr></thead>
+  <tbody id="src-body"></tbody>
+</table>
+<div id="status"></div>
+
+<script>
+const STEP = 0.1;
+const COLORS = {read:'#0057b8', interest_up:'#2a9d2a', discard:'#c44', save:'#c80', expand:'#888'};
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function pct(w) { return Math.round((w||0)*100); }
+function status(msg) { document.getElementById('status').textContent = msg; }
+
+// ── Mini bar chart on a canvas ──
+function drawBars(canvas, labels, series) {
+  // series: [{label, color, values:[]}]
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.parentElement.clientWidth, H = 160;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const pad = {t:8, r:8, b:28, l:36};
+  const cw = W - pad.l - pad.r;
+  const ch = H - pad.t - pad.b;
+  const n = labels.length;
+  const nSeries = series.length;
+  const maxVal = Math.max(1, ...series.flatMap(s => s.values));
+  const barGroup = cw / n;
+  const barW = Math.max(1, barGroup / nSeries - 1);
+
+  // gridlines
+  ctx.strokeStyle = '#eee'; ctx.lineWidth = 1;
+  for (let i=0; i<=4; i++) {
+    const y = pad.t + ch - (ch * i / 4);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+cw, y); ctx.stroke();
+    ctx.fillStyle = '#aaa'; ctx.font = '10px system-ui'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxVal * i / 4), pad.l - 4, y + 3);
+  }
+
+  // bars
+  series.forEach((s, si) => {
+    ctx.fillStyle = s.color;
+    s.values.forEach((v, i) => {
+      const bh = (v / maxVal) * ch;
+      const x = pad.l + i * barGroup + si * (barW + 1);
+      ctx.fillRect(x, pad.t + ch - bh, barW, bh);
+    });
+  });
+
+  // x-axis labels (every nth)
+  ctx.fillStyle = '#888'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+  const step = Math.max(1, Math.ceil(n / 12));
+  labels.forEach((lbl, i) => {
+    if (i % step !== 0) return;
+    const x = pad.l + i * barGroup + barGroup / 2;
+    // show only time for hourly, date for daily
+    const short = lbl.includes('T') ? lbl.slice(11) : lbl.slice(5);
+    ctx.fillText(short, x, H - pad.b + 14);
+  });
+}
+
+function buildCharts(summary) {
+  // 7-day hourly
+  buildChart('chart7', summary.hourly, 'hour');
+  // 30-day daily
+  buildChart('chart30', summary.daily, 'day');
+}
+
+function buildChart(id, rows, key) {
+  const canvas = document.getElementById(id);
+  // collect all labels in order
+  const labelSet = [...new Set(rows.map(r => r[key]))].sort();
+  const events = ['read','interest_up','discard','save'];
+  const byEvent = {};
+  events.forEach(e => { byEvent[e] = {}; });
+  rows.forEach(r => {
+    if (byEvent[r.event]) byEvent[r.event][r[key]] = r.n;
+  });
+  const series = events
+    .filter(e => Object.values(byEvent[e]).some(v => v > 0))
+    .map(e => ({
+      label: e,
+      color: COLORS[e] || '#888',
+      values: labelSet.map(l => byEvent[e][l] || 0),
+    }));
+  if (labelSet.length) drawBars(canvas, labelSet, series);
+}
+
+// ── Sparkline SVG ──
+function sparkline(values, w, h) {
+  const max = Math.max(1, ...values);
+  const n = values.length;
+  const bw = w / n;
+  const bars = values.map((v, i) => {
+    const bh = Math.max(1, Math.round((v / max) * (h - 2)));
+    const x = Math.round(i * bw);
+    const y = h - bh;
+    return `<rect x="${x}" y="${y}" width="${Math.max(1,Math.round(bw)-1)}" height="${bh}" fill="#0057b8" opacity="0.7"/>`;
+  }).join('');
+  return `<svg width="${w}" height="${h}" class="spark">${bars}</svg>`;
+}
+
+// ── Sources table ──
+const _sw = {};  // source_id -> current interest weight
+
+function buildSources(sources) {
+  sources.forEach(s => { _sw[s.id] = s.interest; });
+  const tbody = document.getElementById('src-body');
+  tbody.innerHTML = '';
+  sources.forEach(s => {
+    const tr = document.createElement('tr');
+    const errBadge = s.fetch_error_count > 0
+      ? `<span class="err" title="${s.fetch_error_count} fetch errors"> ⚠${s.fetch_error_count}</span>` : '';
+    tr.innerHTML = `
+      <td>${esc(s.label)}${errBadge}</td>
+      <td>${s.item_count}</td>
+      <td>${s.read_count}</td>
+      <td>${s.link_count}</td>
+      <td>${sparkline(s.sparkline, 70, 20)}</td>
+      <td>
+        <span class="interest-val" id="iv-${esc(s.id)}">${pct(s.interest)}%</span>
+      </td>
+      <td>
+        <button class="ibtn" title="Less interest" onclick="adjSrc('${esc(s.id)}',-1)">−</button>
+        <button class="ibtn" title="More interest" onclick="adjSrc('${esc(s.id)}',1)">+</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function adjSrc(id, dir) {
+  const next = Math.max(0, Math.min(1, (_sw[id] ?? 0.5) + dir * STEP));
+  _sw[id] = next;
+  document.getElementById('iv-' + id).textContent = pct(next) + '%';
+  try {
+    await fetch(`/topics/sources/${encodeURIComponent(id)}/interest`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({weight: next}),
+    });
+    status('Saved');
+  } catch(e) { status('Save failed'); }
+}
+
+// ── Summary cards ──
+function buildCards(totals) {
+  const labels = {
+    read: 'Items opened',
+    interest_up: 'Links clicked',
+    discard: 'Discarded',
+    save: 'Saved',
+    expand: 'Expanded',
+  };
+  const cards = document.getElementById('cards');
+  cards.innerHTML = Object.entries(labels).map(([k, l]) =>
+    `<div class="card"><div class="val">${totals[k] || 0}</div><div class="lbl">${l}</div></div>`
+  ).join('');
+  // engagement rate
+  const reads = totals.read || 0;
+  const clicks = totals.interest_up || 0;
+  const rate = reads > 0 ? Math.round(clicks / reads * 100) : 0;
+  cards.innerHTML += `<div class="card"><div class="val">${rate}%</div><div class="lbl">Click-through rate</div></div>`;
+}
+
+async function load() {
+  const [summary, sources] = await Promise.all([
+    fetch('/stats/summary').then(r => r.json()),
+    fetch('/stats/sources').then(r => r.json()),
+  ]);
+  buildCards(summary.totals);
+  buildCharts(summary);
+  buildSources(sources);
+}
+
+load().catch(e => status('Load failed: ' + e));
+window.addEventListener('resize', () => {
+  // redraw charts on resize
+  fetch('/stats/summary').then(r => r.json()).then(buildCharts).catch(()=>{});
+});
+</script>
+</body>
+</html>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -1153,6 +1433,11 @@ async def webui_item(item_id: int):
 @router.get("/interests", response_class=HTMLResponse, include_in_schema=False)
 async def interests_page():
     return HTMLResponse(_INTERESTS_HTML)
+
+
+@router.get("/stats", response_class=HTMLResponse, include_in_schema=False)
+async def stats_page():
+    return HTMLResponse(_STATS_HTML)
 
 
 @router.get("/manifest.json", include_in_schema=False)
