@@ -13,22 +13,23 @@ router = APIRouter()
 # Icon generation — solid black PNG, no external dependencies
 # ---------------------------------------------------------------------------
 
+
 def _solid_png(size: int) -> bytes:
     """Generate a minimal solid-black PNG of the given size using only stdlib."""
     # Each row: filter byte (0 = None) + RGB pixels
-    row = b'\x00' + b'\x00\x00\x00' * size
+    row = b"\x00" + b"\x00\x00\x00" * size
     raw = row * size
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         crc = zlib.crc32(tag + data) & 0xFFFFFFFF
-        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
 
-    ihdr = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
     return (
-        b'\x89PNG\r\n\x1a\n'
-        + chunk(b'IHDR', ihdr)
-        + chunk(b'IDAT', zlib.compress(raw))
-        + chunk(b'IEND', b'')
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
     )
 
 
@@ -190,7 +191,12 @@ _HTML = r"""<!DOCTYPE html>
     font-size: 14px;
   }
   #topbar .title { font-weight: bold; font-size: 16px; }
+  #topbar .title a { color: inherit; text-decoration: none; }
+  #topbar .title a:hover { text-decoration: underline; }
   #topbar .meta  { color: var(--meta); }
+  #topbar .nav-links { display: flex; gap: 10px; align-items: center; }
+  #topbar .nav-links a { color: var(--meta); text-decoration: none; font-size: 13px; }
+  #topbar .nav-links a:hover { color: var(--fg); text-decoration: underline; }
 
   /* ── Main content area ── */
   #stage {
@@ -437,8 +443,13 @@ _HTML = r"""<!DOCTYPE html>
 <body>
 
 <div id="topbar">
-  <span class="title">newsagg</span>
-  <span id="topbar-meta" class="meta"></span>
+  <span class="title"><a href="/">newsagg</a></span>
+  <span class="nav-links">
+    <a href="/add-source">Add source</a>
+    <a href="/interests">Interests</a>
+    <a href="/stats">Stats</a>
+    <span id="topbar-meta" class="meta"></span>
+  </span>
 </div>
 
 <div id="stage">
@@ -475,6 +486,7 @@ _HTML = r"""<!DOCTYPE html>
     <div class="menu-item" onclick="menuAction('interest_down')">Less like this</div>
     <div class="menu-item danger" onclick="menuAction('discard')">Discard</div>
     <div class="menu-item" onclick="location.href='/interests'">Manage interests…</div>
+    <div class="menu-item" onclick="location.href='/add-source'">Add source…</div>
     <div class="menu-item" onclick="closeMenu()">Cancel</div>
   </div>
 </div>
@@ -1433,9 +1445,205 @@ window.addEventListener('resize', () => load().catch(()=>{}));
 """
 
 
+_ADD_SOURCE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Add source – newsagg</title>
+<style>
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --bg: #fff; --fg: #111; --meta: #666; --border: #ddd; --accent: #0057b8;
+    --ok: #1a7d36; --err: #c00;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg);
+         padding: calc(var(--sat) + 12px) 16px calc(var(--sab) + 16px); max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  a.back { font-size: 14px; color: var(--accent); text-decoration: none; display: inline-block; margin-bottom: 16px; }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 13px; color: var(--meta); margin-bottom: 4px; }
+  .field input[type=text] { width: 100%; padding: 10px 12px; font-size: 16px; border: 1px solid var(--border);
+                            border-radius: 4px; font-family: inherit; }
+  .field input[type=text]:focus { outline: none; border-color: var(--fg); }
+  .hint { font-size: 12px; color: var(--meta); margin-top: 2px; }
+  button { padding: 10px 20px; font-size: 15px; border: 2px solid var(--fg); background: var(--bg);
+           color: var(--fg); cursor: pointer; border-radius: 4px; font-family: inherit; }
+  button:hover { background: var(--fg); color: var(--bg); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:disabled:hover { background: var(--bg); color: var(--fg); }
+  #status { margin-top: 16px; min-height: 24px; font-size: 14px; }
+  .result-box { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 6px; display: none; }
+  .result-box.show { display: block; }
+  .result-box .r-title { font-weight: bold; font-size: 17px; margin-bottom: 2px; }
+  .result-box .r-url { font-size: 13px; color: var(--meta); word-break: break-all; margin-bottom: 8px; }
+  .result-box .r-tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 3px;
+                        background: #e8e8e8; margin-bottom: 10px; }
+  .result-box .r-exists { color: var(--meta); font-size: 13px; margin-bottom: 10px; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+             border-top-color: var(--fg); border-radius: 50%; animation: spin .6s linear infinite;
+             vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .err-msg { color: var(--err); }
+  .ok-msg { color: var(--ok); }
+  #label-field, #id-field { display: none; }
+  #label-field.show, #id-field.show { display: block; }
+</style>
+</head>
+<body>
+<a class="back" href="/">← Back to feed</a>
+<h1>Add source</h1>
+<p style="font-size:13px;color:var(--meta);margin-bottom:16px">
+  Enter a website URL, RSS feed, or Atom feed URL. If you give a website, we'll try to auto-discover its feed.
+</p>
+
+<div class="field">
+  <label for="url-input">URL or website name</label>
+  <input type="text" id="url-input" placeholder="e.g. arstechnica.com or https://example.com/feed.xml" autofocus>
+  <div class="hint">Enter any URL — we'll figure out the rest</div>
+</div>
+
+<button id="discover-btn" onclick="doDiscover()">Find feed</button>
+
+<div id="status"></div>
+
+<div class="result-box" id="result-box">
+  <div class="r-title" id="r-title"></div>
+  <div class="r-url" id="r-url"></div>
+  <span class="r-tag" id="r-tag"></span>
+  <div class="r-exists" id="r-exists"></div>
+
+  <div class="field show" id="label-field">
+    <label for="label-input">Label</label>
+    <input type="text" id="label-input">
+  </div>
+
+  <div class="field show" id="id-field">
+    <label for="id-input">Source ID</label>
+    <input type="text" id="id-input">
+    <div class="hint">Unique identifier (auto-generated, but editable)</div>
+  </div>
+
+  <button id="add-btn" onclick="doAdd()">Add source</button>
+</div>
+
+<script>
+const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+let lastResult = null;
+
+function status(msg, isErr) {
+  const el = document.getElementById('status');
+  el.innerHTML = (isErr ? '<span class="err-msg">' : '<span>') + esc(msg) + '</span>';
+}
+
+function showResult(r) {
+  lastResult = r;
+  document.getElementById('r-title').textContent = r.title || '(no title)';
+  document.getElementById('r-url').textContent = r.feed_url;
+  document.getElementById('r-url').style.cursor = 'pointer';
+  document.getElementById('r-url').onclick = () => window.open(r.feed_url, '_blank');
+  document.getElementById('r-tag').textContent = r.type === 'atom' ? 'Atom' : 'RSS';
+  document.getElementById('r-exists').textContent = r.already_exists ? '⚠ This feed is already in your sources.' : '';
+
+  const labelEl = document.getElementById('label-input');
+  labelEl.value = r.title || r.feed_url;
+  const idEl = document.getElementById('id-input');
+  idEl.value = r.source_id;
+
+  document.getElementById('label-field').classList.add('show');
+  document.getElementById('id-field').classList.add('show');
+  document.getElementById('result-box').classList.add('show');
+  document.getElementById('add-btn').disabled = false;
+  document.getElementById('discover-btn').disabled = false;
+}
+
+async function doDiscover() {
+  const url = document.getElementById('url-input').value.trim();
+  if (!url) { status('Please enter a URL.', true); return; }
+
+  const btn = document.getElementById('discover-btn');
+  btn.disabled = true;
+  document.getElementById('result-box').classList.remove('show');
+  document.getElementById('label-field').classList.remove('show');
+  document.getElementById('id-field').classList.remove('show');
+  status('Discovering feed from <span class="spinner"></span>' + esc(url));
+
+  try {
+    const r = await fetch('/sources/discover', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      status(err.detail || 'Discovery failed.', true);
+      btn.disabled = false;
+      return;
+    }
+    const data = await r.json();
+    showResult(data);
+    status('Feed found! Review the details and click "Add source".');
+  } catch(e) {
+    status('Network error: ' + e.message, true);
+    btn.disabled = false;
+  }
+}
+
+async function doAdd() {
+  if (!lastResult) return;
+  const label = document.getElementById('label-input').value.trim() || lastResult.title || lastResult.feed_url;
+  const sourceId = document.getElementById('id-input').value.trim() || lastResult.source_id;
+
+  const btn = document.getElementById('add-btn');
+  btn.disabled = true;
+  status('Adding source…');
+
+  try {
+    const r = await fetch('/sources/confirm-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        id: sourceId,
+        type: 'rss',
+        label: label,
+        config: {url: lastResult.feed_url},
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      status(err.detail || 'Failed to add source.', true);
+      btn.disabled = false;
+      return;
+    }
+    status(esc(label) + ' added successfully! <a href="/" style="color:var(--accent)">Back to feed →</a>');
+    document.getElementById('url-input').value = '';
+    document.getElementById('result-box').classList.remove('show');
+    document.getElementById('label-field').classList.remove('show');
+    document.getElementById('id-field').classList.remove('show');
+  } catch(e) {
+    status('Network error: ' + e.message, true);
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('url-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doDiscover();
+});
+</script>
+</body>
+</html>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def webui():
@@ -1455,6 +1663,11 @@ async def interests_page():
 @router.get("/stats", response_class=HTMLResponse, include_in_schema=False)
 async def stats_page():
     return HTMLResponse(_STATS_HTML)
+
+
+@router.get("/add-source", response_class=HTMLResponse, include_in_schema=False)
+async def add_source_page():
+    return HTMLResponse(_ADD_SOURCE_HTML)
 
 
 @router.get("/manifest.json", include_in_schema=False)

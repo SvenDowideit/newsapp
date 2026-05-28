@@ -25,6 +25,18 @@ class SourceCreate(BaseModel):
     config: dict[str, Any] = {}
 
 
+class SourceDiscoverRequest(BaseModel):
+    url: str
+
+
+class SourceDiscoverResult(BaseModel):
+    feed_url: str
+    title: str
+    type: str  # "rss" or "atom"
+    source_id: str
+    already_exists: bool = False
+
+
 class ClusterItem(BaseModel):
     id: int
     created_at: datetime

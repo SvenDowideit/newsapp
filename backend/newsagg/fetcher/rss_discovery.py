@@ -5,15 +5,145 @@ import re
 import threading
 from urllib.parse import urljoin, urlparse
 
+import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
 from .. import db as database
+from ..models import SourceDiscoverResult
 
 logger = logging.getLogger(__name__)
 
 _scanned_domains: set[str] = set()
 _scan_lock = threading.Lock()
+
+COMMON_FEED_PATHS = [
+    "/feed",
+    "/rss",
+    "/atom.xml",
+    "/feed.xml",
+    "/index.xml",
+    "/rss.xml",
+    "/feed/atom",
+]
+
+
+def _make_source_id(url: str, feed_url: str) -> str:
+    domain = urlparse(feed_url).netloc or urlparse(url).netloc
+    safe = re.sub(r"[^a-z0-9_]", "_", domain).strip("_")[:40]
+    if not safe:
+        safe = "feed"
+    return safe
+
+
+def discover_feed(url: str) -> SourceDiscoverResult | None:
+    """Given a URL or partial URL, try to discover a feed.
+
+    Strategy (no DB calls made here):
+    1. Try parsing the URL directly as RSS/Atom via feedparser.
+    2. If the URL looks like a website, fetch HTML and look for <link> tags.
+    3. Try common feed paths (/feed, /rss, /atom.xml, etc.).
+    Returns a SourceDiscoverResult (already_exists is always False here;
+    caller checks DB separately) or None if nothing worked.
+    """
+    cleaned = url.strip()
+
+    if not cleaned.startswith(("http://", "https://")):
+        cleaned = "https://" + cleaned
+
+    headers = {"User-Agent": "newsagg/0.1 (personal aggregator)"}
+
+    # Strategy 1: Try direct feed parse
+    feed = feedparser.parse(cleaned)
+    if feed.version and feed.entries:
+        title = feed.feed.get("title", "") or urlparse(cleaned).netloc
+        feed_type = "atom" if "atom" in (feed.version or "") else "rss"
+        source_id = _make_source_id(cleaned, cleaned)
+        return SourceDiscoverResult(
+            feed_url=cleaned,
+            title=title,
+            type=feed_type,
+            source_id=source_id,
+        )
+
+    # Strategy 2: Fetch HTML, look for <link> tags
+    try:
+        resp = httpx.get(cleaned, headers=headers, timeout=10, follow_redirects=True)
+        final_url = str(resp.url)
+        ct = resp.headers.get("content-type", "")
+        html = resp.text if "html" in ct else None
+
+        if html:
+            soup = BeautifulSoup(html, "html.parser")
+            rss_types = {
+                "application/rss+xml",
+                "application/atom+xml",
+                "application/rdf+xml",
+            }
+            for link in soup.find_all("link", rel="alternate"):
+                link_type = link.get("type", "").strip().lower()
+                if link_type in rss_types:
+                    href = link.get("href", "").strip()
+                    if href:
+                        feed_url = urljoin(final_url, href)
+                        title_tag = link.get("title") or soup.find("title")
+                        if title_tag and hasattr(title_tag, "get_text"):
+                            title = title_tag.get_text(strip=True)
+                        elif title_tag:
+                            title = str(title_tag)
+                        else:
+                            title = urlparse(final_url).netloc
+                        feed_type = "atom" if "atom" in link_type else "rss"
+                        source_id = _make_source_id(cleaned, feed_url)
+                        return SourceDiscoverResult(
+                            feed_url=feed_url,
+                            title=title,
+                            type=feed_type,
+                            source_id=source_id,
+                        )
+
+    except Exception as exc:
+        logger.debug("discover_feed: HTML fetch failed for %s: %s", cleaned, exc)
+
+    # Strategy 3: Try common feed paths
+    parsed = urlparse(cleaned)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    for path in COMMON_FEED_PATHS:
+        candidate = base + path
+        try:
+            feed = feedparser.parse(candidate)
+            if feed.version and feed.entries:
+                title = feed.feed.get("title", "") or parsed.netloc
+                feed_type = "atom" if "atom" in (feed.version or "") else "rss"
+                source_id = _make_source_id(cleaned, candidate)
+                return SourceDiscoverResult(
+                    feed_url=candidate,
+                    title=title,
+                    type=feed_type,
+                    source_id=source_id,
+                )
+        except Exception:
+            continue
+
+        alt_path = parsed.path.rstrip("/") + path
+        if alt_path != path:
+            candidate2 = base + alt_path
+            try:
+                feed = feedparser.parse(candidate2)
+                if feed.version and feed.entries:
+                    title = feed.feed.get("title", "") or parsed.netloc
+                    feed_type = "atom" if "atom" in (feed.version or "") else "rss"
+                    source_id = _make_source_id(cleaned, candidate2)
+                    return SourceDiscoverResult(
+                        feed_url=candidate2,
+                        title=title,
+                        type=feed_type,
+                        source_id=source_id,
+                    )
+            except Exception:
+                continue
+
+    return None
 
 
 def autodiscover_rss(page_url: str, html: str, con) -> int:
