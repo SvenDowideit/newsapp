@@ -18,6 +18,13 @@ active_reader_boost = 0.25
 breaking_news_threshold = 5
 breaking_news_window_minutes = 10
 
+[ranking]
+source_diversity_weight = 0.12
+source_novelty_weight = 0.20
+source_novelty_halflife = 50.0
+low_volume_boost_weight = 0.10
+source_diversity_window_days = 7
+
 [interest]
 decay_rate = 0
 learn_rate_read = 0

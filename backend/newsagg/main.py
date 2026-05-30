@@ -131,10 +131,7 @@ async def lifespan(app: FastAPI):
     database.run_sync(warm_cache, priority=database.BG)
 
     items_api.set_config(_config)
-
-    zc = await asyncio.get_running_loop().run_in_executor(
-        None, _register_mdns, _config.server.port
-    )
+    database.set_ranking_config(_config.ranking)
 
     threading.Thread(target=_backfill_resolved_urls, daemon=True, name="backfill").start()
 

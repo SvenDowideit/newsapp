@@ -43,6 +43,16 @@ class GeographyConfig:
 
 
 @dataclass
+class RankingConfig:
+    """Tune how source diversity, novelty, and volume affect scoring."""
+    source_diversity_weight: float = 0.12
+    source_novelty_weight: float = 0.20
+    source_novelty_halflife: float = 50.0
+    low_volume_boost_weight: float = 0.10
+    source_diversity_window_days: int = 7
+
+
+@dataclass
 class InterestConfig:
     decay_rate: float = 0.01
     learn_rate_read: float = 0.15
@@ -77,6 +87,7 @@ class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    ranking: RankingConfig = field(default_factory=RankingConfig)
     interest: InterestConfig = field(default_factory=InterestConfig)
     geography: GeographyConfig = field(default_factory=GeographyConfig)
     sources: list[SourceConfig] = field(default_factory=list)
@@ -94,6 +105,8 @@ def load(path: str | Path = "config.toml") -> Config:
         cfg.ollama = OllamaConfig(**o)
     if sc := raw.get("scheduler"):
         cfg.scheduler = SchedulerConfig(**sc)
+    if r := raw.get("ranking"):
+        cfg.ranking = RankingConfig(**r)
     if i := raw.get("interest"):
         cfg.interest = InterestConfig(**i)
     if g := raw.get("geography"):

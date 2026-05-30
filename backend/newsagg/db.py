@@ -709,22 +709,110 @@ def get_topic_spikes(con, window_minutes: int, threshold: int):
     ).fetchall()
 
 
+_ranking_cfg: dict | None = None
+
+
+def set_ranking_config(cfg) -> None:
+    global _ranking_cfg
+    _ranking_cfg = {
+        "diversity_weight": cfg.source_diversity_weight,
+        "novelty_weight": cfg.source_novelty_weight,
+        "novelty_halflife": cfg.source_novelty_halflife,
+        "low_volume_weight": cfg.low_volume_boost_weight,
+        "window_days": cfg.source_diversity_window_days,
+    } if cfg else None
+
+
+def _source_factors_sql(window_days: int, novelty_halflife: float) -> str:
+    """Return SQL fragments that build _src_factors temp table.
+    
+    For each source computes:
+      - cluster_count: how many clusters in the window
+      - volume_boost: boost for sources with few clusters (log-ratio vs median)
+      - novelty_boost: new-source boost that decays over time
+    """
+    return f"""
+    CREATE OR REPLACE TEMP TABLE _src_factors AS
+    WITH
+    src_clusters AS (
+        SELECT sid, count(*) AS cnt
+        FROM (
+            SELECT UNNEST(source_ids) AS sid
+            FROM clusters
+            WHERE latest_seen_at >= now() - INTERVAL '{window_days} days'
+        )
+        GROUP BY sid
+    ),
+    src_agg AS (
+        SELECT
+            sid,
+            cnt,
+            coalesce(avg(cnt) OVER (), 1.0) AS avg_cnt,
+            sum(cnt) OVER () AS total_cnt,
+            count(*) OVER () AS n_sources
+        FROM src_clusters
+    ),
+    src_age AS (
+        SELECT sid, min(first_seen_at) AS first_cluster_at
+        FROM (
+            SELECT UNNEST(source_ids) AS sid, first_seen_at
+            FROM clusters
+        )
+        GROUP BY sid
+    ),
+    all_sources AS (
+        SELECT id FROM sources WHERE enabled IS TRUE
+    )
+    SELECT
+        a.id AS sid,
+        coalesce(sa.cnt, 0) AS cnt,
+        coalesce(sa.avg_cnt, 1) AS avg_cnt,
+        coalesce(sa.total_cnt, 0) AS total_cnt,
+        coalesce(sa.n_sources, 0) AS n_sources,
+        sa.cnt / greatest(sa.total_cnt, 1.0) AS share,
+        CASE
+            WHEN coalesce(sa.cnt, 0) = 0 THEN 1.0
+            WHEN sa.cnt >= sa.avg_cnt THEN 0.0
+            ELSE ln(greatest(sa.avg_cnt, 1.0)::double / greatest(sa.cnt, 1.0)::double)
+                 / ln(greatest(sa.avg_cnt, 1.0)::double + 1.0)
+        END AS volume_boost,
+        CASE
+            WHEN age.hours_since_first IS NULL THEN 0.0
+            ELSE exp(ln(0.5) * age.hours_since_first / {novelty_halflife})
+        END AS novelty_boost
+    FROM all_sources a
+    LEFT JOIN src_agg sa ON sa.sid = a.id
+    LEFT JOIN (
+        SELECT sid, extract(epoch FROM now() - first_cluster_at) / 3600.0 AS hours_since_first
+        FROM src_age
+    ) age ON age.sid = a.id
+    """
+
+
 def refresh_scores(con) -> None:
     """Recompute combined_score for clusters whose score is stale (>5 min old).
-
-    The single-statement correlated-subquery form crashes DuckDB 1.5.2 in its
-    primary-index MVCC path (RevertCommit / IndexDataRemover) when the UPDATE
-    touches a table that has a correlated UNNEST subquery referencing the same
-    table.  Work around by computing scores in a separate SELECT first, then
-    joining back for the UPDATE.
+    Incorporates source diversity, novelty, and low-volume boosting.
     """
+    cfg = _ranking_cfg or {
+        "diversity_weight": 0.12, "novelty_weight": 0.20,
+        "novelty_halflife": 50.0, "low_volume_weight": 0.10,
+        "window_days": 7,
+    }
+    w = cfg["window_days"]
+    nh = cfg["novelty_halflife"]
+
+    con.execute(_source_factors_sql(w, nh))
+
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _score_update AS
         SELECT
             c.id,
             exp(-extract(epoch FROM (now() - c.latest_seen_at)) / 86400.0) AS recency,
             coalesce(avg(tw.weight), 0.5) AS topic_interest,
-            coalesce(avg(sw.interest), 0.5) AS source_interest
+            coalesce(avg(sw.interest), 0.5) AS source_interest,
+            coalesce(avg(sf.volume_boost), 0.0) AS avg_volume_boost,
+            coalesce(max(sf.novelty_boost), 0.0) AS max_novelty_boost,
+            coalesce(max(sf.share), 0.0) AS max_share
         FROM clusters c
         LEFT JOIN LATERAL (
             SELECT w2.weight
@@ -736,19 +824,29 @@ def refresh_scores(con) -> None:
             FROM UNNEST(c.source_ids) AS sid(id)
             JOIN sources s ON s.id = sid.id
         ) sw ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT f.volume_boost, f.novelty_boost, f.share
+            FROM UNNEST(c.source_ids) AS sid(id)
+            JOIN _src_factors f ON f.sid = sid.id
+        ) sf ON TRUE
         WHERE c.scored_at IS NULL
            OR c.scored_at < now() - INTERVAL '5 minutes'
         GROUP BY c.id, c.latest_seen_at
     """)
-    con.execute("""
+    con.execute(f"""
         UPDATE clusters
         SET recency_score  = s.recency,
             interest_score = 0.7 * s.topic_interest + 0.3 * s.source_interest,
-            combined_score = 0.4 * s.recency + 0.6 * (0.7 * s.topic_interest + 0.3 * s.source_interest),
+            combined_score = 0.4 * s.recency
+                           + 0.6 * (0.7 * s.topic_interest + 0.3 * s.source_interest)
+                           + {cfg["low_volume_weight"]} * s.avg_volume_boost
+                           + {cfg["novelty_weight"]} * s.max_novelty_boost
+                           + {cfg["diversity_weight"]} * (1.0 - s.max_share),
             scored_at      = now()
         FROM _score_update s
         WHERE clusters.id = s.id
     """)
+    con.execute("DROP TABLE IF EXISTS _src_factors")
     con.execute("DROP TABLE IF EXISTS _score_update")
 
 
